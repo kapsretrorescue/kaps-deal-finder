@@ -14,7 +14,12 @@ name: deal-finder
 on:
   schedule:
     - cron: "*/15 * * * *"
-  workflow_dispatch: {}     # allows manual "Run workflow" button for testing
+  workflow_dispatch:        # allows manual "Run workflow" button for testing
+    inputs:
+      mock:
+        description: "Use fake test listings instead of real marketplaces"
+        type: boolean
+        default: false
 
 # Never let two runs overlap (they would fight over the database file).
 concurrency:
@@ -46,7 +51,7 @@ jobs:
           REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
           REDDIT_USER_AGENT: "github-actions:kaps-deal-finder:v1.0"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: python -m dealfinder.main
+        run: python -m dealfinder.main ${{ inputs.mock && '--mock' || '' }}
 
       - name: Commit updated database
         run: |
