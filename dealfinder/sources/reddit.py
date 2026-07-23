@@ -36,21 +36,27 @@ def fetch(consoles: dict, settings: dict) -> list[Listing]:
     client_id = os.environ.get("REDDIT_CLIENT_ID", "")
     client_secret = os.environ.get("REDDIT_CLIENT_SECRET", "")
     user_agent = os.environ.get("REDDIT_USER_AGENT", "windows:kaps-deal-finder:v1.0")
-    if not client_id or not client_secret:
-        log.info("Reddit skipped: REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET not set in .env")
-        return []
 
-    # App-only token: read-only access, no reddit account password involved.
-    resp = requests.post(
-        TOKEN_URL,
-        auth=(client_id, client_secret),
-        data={"grant_type": "client_credentials"},
-        headers={"User-Agent": user_agent},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    token = resp.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}", "User-Agent": user_agent}
+    if client_id and client_secret:
+        # Preferred: app-only token. Read-only, no reddit password involved.
+        resp = requests.post(
+            TOKEN_URL,
+            auth=(client_id, client_secret),
+            data={"grant_type": "client_credentials"},
+            headers={"User-Agent": user_agent},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        token = resp.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}", "User-Agent": user_agent}
+        base_url = "https://oauth.reddit.com"
+    else:
+        # Keyless fallback: reddit's public JSON feed. Works from home
+        # connections at low rates; often blocked (403) from cloud/datacenter
+        # IPs, in which case we log it and move on.
+        log.info("Reddit: no API keys set, trying public JSON feed (may be blocked)")
+        headers = {"User-Agent": user_agent}
+        base_url = "https://www.reddit.com"
 
     cfg = settings["sources"]["reddit"]
     listings: list[Listing] = []
@@ -58,7 +64,7 @@ def fetch(consoles: dict, settings: dict) -> list[Listing]:
     for sub in cfg.get("subreddits", ["hardwareswap"]):
         try:
             resp = requests.get(
-                f"https://oauth.reddit.com/r/{sub}/new",
+                f"{base_url}/r/{sub}/new.json",
                 headers=headers,
                 params={"limit": str(cfg.get("max_posts", 75))},
                 timeout=30,
