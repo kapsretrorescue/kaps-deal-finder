@@ -1,0 +1,87 @@
+# ============================================================================
+# Kap's Retro Rescue deal finder — general settings
+# ============================================================================
+
+# --- Profit math (used with each console's resale / repair_cost) -----------
+pricing:
+  fee_rate: 0.13            # marketplace fees + shipping supplies as a fraction
+                            # of resale price (eBay ~13% is a fair default)
+  min_profit: 20            # minimum $ profit per unit for a listing to be a "deal"
+  refurb_cost_working: 8    # your avg cost to clean/prep a WORKING unit for resale
+
+# --- Digest behaviour -------------------------------------------------------
+digest:
+  interval_hours: 3         # send at most one digest every N hours
+                            # (script can run hourly; finds are banked in the
+                            #  database until the next digest is due)
+
+# --- Sources ----------------------------------------------------------------
+# A source with enabled: true but missing API keys in .env just skips itself
+# with a log message, so you can flip these on before the keys exist.
+sources:
+  ebay:
+    enabled: true
+    max_results_per_search: 50
+  reddit:
+    enabled: true
+    subreddits: ["hardwareswap"]   # add e.g. "GameSale" here later if you like
+    max_posts: 75
+  mock:
+    enabled: false            # fake listings for testing: python -m dealfinder.main --mock
+
+# --- Notifications ----------------------------------------------------------
+# Discord needs DISCORD_WEBHOOK_URL in .env.
+# Email needs the SMTP_* variables in .env (see .env.example).
+notify:
+  discord: true
+  email: false
+  instant_deals: true    # deals that beat your max-buy price ping Discord
+                         # IMMEDIATELY; everything else waits for the digest
+
+# --- Condition language -----------------------------------------------------
+# Phrases that mark a listing as "for parts" vs "tested working".
+# Checked lowercase. Parts phrases win ties (e.g. "not working" won't be
+# mistaken for "working"). Listings with signals from BOTH lists are labelled
+# "mixed"; listings with neither are "unverified" and judged by the stricter
+# for-parts max-buy price.
+condition:
+  parts_phrases:
+    - "for parts"
+    - "parts only"
+    - "parts or repair"
+    - "as-is"
+    - "as is"
+    - "not working"
+    - "doesn't work"
+    - "does not work"
+    - "broken"
+    - "cracked"
+    - "no power"
+    - "won't turn on"
+    - "wont turn on"
+    - "won't power"
+    - "untested"
+    - "for repair"
+    - "needs repair"
+    - "needs work"
+    - "damaged"
+    - "faulty"
+    - "dead"
+    - "corrosion"
+    - "battery damage"
+    - "read description"
+  working_phrases:
+    - "tested"
+    - "works great"
+    - "works perfectly"
+    - "working"
+    - "fully functional"
+    - "functional"
+    - "excellent condition"
+    - "great condition"
+    - "good condition"
+    - "refurbished"
+    - "restored"
+    - "new screen"
+    - "cib"
+    - "complete in box"

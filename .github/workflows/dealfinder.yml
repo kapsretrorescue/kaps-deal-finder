@@ -1,0 +1,57 @@
+# Runs the deal finder on GitHub's servers every ~15 minutes, 24/7.
+#
+# Notes:
+#  - GitHub's cron is best-effort: runs typically fire 3-15 min after the
+#    scheduled time. That's fine for this bot.
+#  - API keys live in the repo's encrypted Secrets (Settings -> Secrets and
+#    variables -> Actions), NEVER in this file or the code.
+#  - The SQLite dedup database is committed back to the repo after each run
+#    so the bot remembers what it has already seen. These commits also count
+#    as repo activity, which stops GitHub from auto-pausing the schedule.
+
+name: deal-finder
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch: {}     # allows manual "Run workflow" button for testing
+
+# Never let two runs overlap (they would fight over the database file).
+concurrency:
+  group: deal-finder
+  cancel-in-progress: false
+
+permissions:
+  contents: write           # needed to push the updated database back
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run deal finder
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: "github-actions:kaps-deal-finder:v1.0"
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: python -m dealfinder.main
+
+      - name: Commit updated database
+        run: |
+          git config user.name "deal-finder-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/dealfinder.db
+          git diff --cached --quiet || git commit -m "update seen-listings database"
+          git push

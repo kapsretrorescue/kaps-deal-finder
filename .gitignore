@@ -1,0 +1,11 @@
+# Secrets — never commit these
+.env
+
+# Local-only
+.venv/
+logs/
+__pycache__/
+*.pyc
+
+# NOTE: data/dealfinder.db is intentionally NOT ignored — the GitHub Actions
+# workflow commits it back after each run so dedup memory survives between runs.

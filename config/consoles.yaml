@@ -1,0 +1,112 @@
+# ============================================================================
+# Kap's Retro Rescue — tracked consoles
+# ============================================================================
+# This is YOUR file to edit. No code changes needed — the bot re-reads it
+# every run.
+#
+# For each console:
+#   name            - friendly name shown in the Discord digest
+#   search_terms    - what the bot types into the eBay search box (1-2 terms)
+#   keywords        - if ANY of these appear in a listing title/description,
+#                     it's considered a match for this console (lowercase)
+#   exclude         - ...UNLESS one of these also appears (prevents a plain
+#                     "Game Boy" bucket from swallowing "Game Boy Color" etc.)
+#   resale          - what YOU sell a refurbished unit for (PLACEHOLDER —
+#                     review these against your actual sold prices!)
+#   repair_cost     - your average parts+time cost to fix a broken unit
+#
+# The bot computes your max-buy prices from these numbers:
+#   max_buy_parts   = resale x (1 - fee_rate) - repair_cost - min_profit
+#   max_buy_working = resale x (1 - fee_rate) - refurb_cost_working - min_profit
+# (fee_rate, min_profit, refurb_cost_working live in settings.yaml)
+# ============================================================================
+
+consoles:
+
+  gb_dmg:
+    name: "Game Boy (DMG)"
+    search_terms: ["game boy original console"]
+    keywords: ["game boy", "gameboy", "dmg-01", "dmg 01", "original gameboy"]
+    exclude: ["color", "colour", "advance", "pocket", "micro", "gba", "sp"]
+    resale: 85        # PLACEHOLDER - edit me
+    repair_cost: 15   # PLACEHOLDER - edit me
+
+  gb_color:
+    name: "Game Boy Color"
+    search_terms: ["game boy color console"]
+    keywords: ["game boy color", "gameboy color", "game boy colour", "gbc", "cgb-001", "cgb 001"]
+    exclude: []
+    resale: 75
+    repair_cost: 15
+
+  gba:
+    name: "Game Boy Advance"
+    search_terms: ["game boy advance console"]
+    keywords: ["game boy advance", "gameboy advance", "gba", "agb-001", "agb 001"]
+    exclude: ["sp", "ags", "micro"]
+    resale: 70
+    repair_cost: 15
+
+  gba_sp:
+    name: "GBA SP"
+    search_terms: ["game boy advance sp"]
+    keywords: ["advance sp", "gba sp", "gameboy sp", "game boy sp", "ags-001", "ags-101", "ags 001", "ags 101"]
+    exclude: []
+    resale: 95        # AGS-101 (bright screen) sells higher - consider splitting later
+    repair_cost: 20
+
+  ds:
+    name: "Nintendo DS (original)"
+    search_terms: ["nintendo ds console ntr-001"]
+    keywords: ["ntr-001", "ntr 001", "ds phat", "original ds", "nintendo ds"]
+    exclude: ["lite", "dsi", "3ds", "2ds", "usg"]
+    resale: 45
+    repair_cost: 12
+
+  ds_lite:
+    name: "DS Lite"
+    search_terms: ["nintendo ds lite console"]
+    keywords: ["ds lite", "dslite", "usg-001", "usg 001"]
+    exclude: []
+    resale: 65
+    repair_cost: 15
+
+  dsi:
+    name: "DSi / DSi XL"
+    search_terms: ["nintendo dsi console"]
+    keywords: ["dsi", "twl-001", "twl 001", "utl-001", "utl 001"]
+    exclude: []
+    resale: 55
+    repair_cost: 15
+
+  n3ds:
+    name: "3DS / 3DS XL"
+    search_terms: ["nintendo 3ds console"]
+    keywords: ["3ds", "ctr-001", "ctr 001", "spr-001", "spr 001"]
+    exclude: ["new 3ds", "new nintendo 3ds"]
+    resale: 110
+    repair_cost: 25
+
+  n2ds:
+    name: "2DS"
+    search_terms: ["nintendo 2ds console"]
+    keywords: ["2ds", "ftr-001", "ftr 001"]
+    exclude: ["new 2ds", "new nintendo 2ds", "xl"]
+    resale: 80
+    repair_cost: 20
+
+  new_3ds:
+    name: "New 3DS / New 3DS XL"
+    search_terms: ["new nintendo 3ds xl console"]
+    keywords: ["new 3ds", "new nintendo 3ds", "ktr-001", "ktr 001", "red-001", "red 001"]
+    exclude: []
+    resale: 180
+    repair_cost: 30
+
+  new_2ds_xl:
+    name: "New 2DS XL"
+    search_terms: ["new nintendo 2ds xl console"]
+    keywords: ["new 2ds", "new nintendo 2ds", "jan-001", "jan 001"]
+    exclude: []
+    resale: 140
+    repair_cost: 25
