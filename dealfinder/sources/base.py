@@ -1,12 +1,10 @@
 """Shared data shape for every marketplace source.
 
-Every source module (ebay.py, reddit.py, mock.py, and any you add later)
-exposes one function:
+Every source module (ebay.py, reddit.py, mock.py) exposes one function:
 
     fetch(consoles: dict, settings: dict) -> list[Listing]
 
-That's the entire contract. To add a new marketplace, copy mock.py,
-make fetch() return Listing objects, and enable it in settings.yaml.
+To add a new marketplace, copy mock.py and enable it in settings.yaml.
 """
 from __future__ import annotations
 
@@ -15,10 +13,15 @@ from dataclasses import dataclass
 
 @dataclass
 class Listing:
-    source: str            # "ebay", "reddit", ...
-    listing_id: str        # unique ID within that source (used for dedup)
+    source: str                  # "ebay", "reddit", ...
+    listing_id: str              # unique ID within that source (dedup key)
     title: str
     url: str
-    description: str = ""  # body text if the source provides one
-    price: float | None = None  # None = we couldn't find a clean price
-    price_note: str = ""   # e.g. "multiple prices in post - open listing"
+    description: str = ""
+    price: float | None = None   # None = no clean price found
+    price_note: str = ""
+    shipping: float | None = None    # None = shipping cost unknown
+    listing_type: str = ""       # "AUCTION", "FIXED_PRICE", or ""
+    end_time: str = ""           # ISO timestamp for auctions, else ""
+    ending_soon: bool = False    # auction ends within the configured window
+    seller_feedback: str = ""    # e.g. "99.1% (2345)"

@@ -2,47 +2,131 @@
 # Kap's Retro Rescue deal finder — general settings
 # ============================================================================
 
-# --- Profit math (used with each console's resale / repair_cost) -----------
+# --- Profit math ------------------------------------------------------------
+# max_buy = sell_price − refurb_cost − profit tier
+# Tiers drive alerts:  🔥 GREAT (≥ $50 est. profit) alert immediately
+#                      ✅ GOOD  (≥ $40)             alert immediately
+#                      🟡 MARGINAL (≥ $25)          hourly digest only
+#                      ❌ below $25                  skipped
 pricing:
-  fee_rate: 0.13            # marketplace fees + shipping supplies as a fraction
-                            # of resale price (eBay ~13% is a fair default)
-  min_profit: 20            # minimum $ profit per unit for a listing to be a "deal"
-  refurb_cost_working: 8    # your avg cost to clean/prep a WORKING unit for resale
+  refurb_cost: 38            # all-in per unit: shell, buttons, retrobright,
+                             # solder, packaging, payment processing
+  profit_tiers:
+    marginal: 25
+    good: 40
+    great: 50
+  screen_repair_penalty: 45  # subtracted from est. profit when screen issues
+                             # detected (DS screens cost $36-53)
+  parts_credit_per_dud: 10   # $ of harvestable parts per expected dud in a lot
 
-# --- Digest behaviour -------------------------------------------------------
-digest:
-  interval_hours: 3         # send at most one digest every N hours
-                            # (script can run hourly; finds are banked in the
-                            #  database until the next digest is due)
+# --- Lot yield --------------------------------------------------------------
+# Not every unit in a lot is salvageable. effective cost per good unit =
+# (price + shipping − parts credit) / (quantity × yield).
+# Yield only applies to lots (quantity >= 2).
+yield:
+  default: 0.75
+  positive:                  # seller says they work, or cosmetic-only issues
+    phrases: ["all power on", "all tested", "all working", "all functional",
+              "all turn on", "everything works", "powers on", "power on fine",
+              "all have broken hinges", "hinges only", "cosmetic only",
+              "cosmetic issues only"]
+    rate: 0.90
+  negative:                  # worst matching phrase wins (lowest yield)
+    - phrases: ["untested", "unknown condition", "no way to test",
+                "can't test", "cannot test", "no idea if works",
+                "don't know if it works"]
+      rate: 0.70
+    - phrases: ["some may not work", "sold as is", "sold as-is", "as-is", "as is"]
+      rate: 0.65
+    - phrases: ["for parts", "parts only", "not working", "non-working",
+                "parts or repair", "parts/repair"]
+      rate: 0.50
 
-# --- Sources ----------------------------------------------------------------
-# A source with enabled: true but missing API keys in .env just skips itself
-# with a log message, so you can flip these on before the keys exist.
-sources:
-  ebay:
-    enabled: true
-    max_results_per_search: 50
-  reddit:
-    enabled: true
-    subreddits: ["hardwareswap"]   # add e.g. "GameSale" here later if you like
-    max_posts: 75
-  mock:
-    enabled: false            # fake listings for testing: python -m dealfinder.main --mock
+# --- Keyword intelligence ---------------------------------------------------
+keywords:
+  # Cheap fixes: these lower the listing price but cost almost nothing to fix.
+  # Shown as "CHEAP FIX" in alerts (shell swap & retrobright already included
+  # in the $38 refurb cost).
+  cheap_fixes:
+    - "broken hinge"
+    - "hinge"
+    - "yellowed"
+    - "yellowing"
+    - "discolored"
+    - "sticky buttons"
+    - "buttons don't work"
+    - "unresponsive buttons"
+    - "needs cleaning"
+    - "dirty"
+    - "grimy"
+    - "scratched"
+    - "cracked shell"
+    - "cosmetic"
+    - "no battery"
+    - "missing battery cover"
+    - "no charger"
+    - "no stylus"
+    - "battery corrosion"
+    - "corroded contacts"
+    - "won't hold charge"
+    - "battery dead"
+    - "loose charging port"
+    - "charging port"
+    - "missing screws"
+    - "missing back cover"
 
-# --- Notifications ----------------------------------------------------------
-# Discord needs DISCORD_WEBHOOK_URL in .env.
-# Email needs the SMTP_* variables in .env (see .env.example).
-notify:
-  discord: true
-  email: false
-  instant_deals: true    # deals that beat your max-buy price ping Discord
-                         # IMMEDIATELY; everything else waits for the digest
+  # Screen problems: fixable but expensive -> profit penalty (see pricing)
+  screen_issues:
+    - "cracked screen"
+    - "broken screen"
+    - "no display"
+    - "black screen"
+    - "white screen"
+    - "dead pixels"
+    - "lines on screen"
+    - "screen doesn't work"
+    - "screen does not work"
 
-# --- Accessory noise filter --------------------------------------------------
-# Listings whose title/description contains any of these are NOT consoles
-# (empty shells, chargers, manuals...) and are skipped for every console.
-# Trade-off: also skips "new shell installed" refurbs — those are rarely
-# underpriced anyway.
+  # Hard avoid: usually unrepairable or not worth the bench time
+  avoid:
+    - "water damage"
+    - "liquid damage"
+    - "was in water"
+    - "flood damage"
+    - "motherboard damage"
+    - "board damage"
+    - "shorted"
+    - "burnt"
+    - "burn marks"
+    - "heavy corrosion"
+    - "severe corrosion"
+    - "missing motherboard"
+    - "no internals"
+    - "shell only"
+    - "housing only"
+    - "cartridge slot broken"
+    - "modded"
+
+  # Non-expert-seller signals: fewer bidders, often underpriced. Shown as a
+  # note in alerts.
+  underpriced_signals:
+    - "estate sale"
+    - "estate find"
+    - "storage unit"
+    - "storage locker"
+    - "attic"
+    - "basement find"
+    - "grandma"
+    - "cleaning out"
+    - "clearing out"
+    - "moving sale"
+    - "garage find"
+    - "no idea if works"
+    - "don't know if it works"
+    - "can't test"
+    - "no way to test"
+
+# --- Accessory noise filter (never consoles) --------------------------------
 matching:
   exclude_always:
     - "shell"
@@ -51,6 +135,24 @@ matching:
     - "box only"
     - "manual only"
     - "charger only"
+    - "charger lot"
+    - "chargers"
+    - "charging cable"
+    - "power adapter"
+    - "ac adapter"
+    - "usg-002"     # DS Lite charger model number
+    - "wap-002"     # 3DS charger model number
+    - "ntr-002"     # DS charger model number
+    - "ags-002"     # GBA SP charger model number
+    - "screen display"   # replacement screens sold as parts
+    - "screen only"
+    - "display only"
+    - "lcd"
+    - "digitizer"
+    - "motherboard"  # board-only listings (also catches "motherboard lot")
+    - "mainboard"
+    - "board only"
+    - "pcb"
     - "replacement screen"
     - "screen replacement"
     - "battery cover"
@@ -58,12 +160,34 @@ matching:
     - "decal"
     - "empty box"
 
-# --- Condition language -----------------------------------------------------
-# Phrases that mark a listing as "for parts" vs "tested working".
-# Checked lowercase. Parts phrases win ties (e.g. "not working" won't be
-# mistaken for "working"). Listings with signals from BOTH lists are labelled
-# "mixed"; listings with neither are "unverified" and judged by the stricter
-# for-parts max-buy price.
+# --- Alerts & digest --------------------------------------------------------
+notify:
+  discord: true
+  email: false
+  instant_min_tier: good     # "great" = only 🔥 alerts instantly;
+                             # "good" = 🔥 and ✅ alert instantly
+  instant_max_per_run: 8     # cap one run's instant ping to the N best;
+                             # the rest still appear in the hourly digest
+digest:
+  interval_hours: 1          # hourly market pulse
+  per_family_min: 3          # aim to show 3-6 listings per console family
+  per_family_max: 6
+  lookback_hours: 24         # digest picks the best from the last N hours
+
+# --- Sources ----------------------------------------------------------------
+sources:
+  ebay:
+    enabled: true
+    max_results_per_search: 50
+    ending_soon_hours: 2     # re-alert auctions ending within this window
+  reddit:
+    enabled: true
+    subreddits: ["hardwareswap"]
+    max_posts: 75
+  mock:
+    enabled: false
+
+# --- Condition language (parts vs working label in alerts) ------------------
 condition:
   parts_phrases:
     - "for parts"
@@ -80,15 +204,18 @@ condition:
     - "won't turn on"
     - "wont turn on"
     - "won't power"
+    - "doesn't turn on"
     - "untested"
     - "for repair"
     - "needs repair"
     - "needs work"
     - "damaged"
     - "faulty"
+    - "defective"
     - "dead"
-    - "corrosion"
-    - "battery damage"
+    - "junk"
+    - "salvage"
+    - "spares or repair"
     - "read description"
   working_phrases:
     - "tested"

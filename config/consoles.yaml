@@ -1,112 +1,122 @@
 # ============================================================================
-# Kap's Retro Rescue — tracked consoles
+# Kap's Retro Rescue — tracked consoles (REAL pricing as of July 2026)
 # ============================================================================
-# This is YOUR file to edit. No code changes needed — the bot re-reads it
-# every run.
+# Max buy price is computed as:  sell_price − refurb_cost − profit tier
+# (refurb_cost and the $25/$40/$50 profit tiers live in settings.yaml)
 #
-# For each console:
-#   name            - friendly name shown in the Discord digest
-#   search_terms    - what the bot types into the eBay search box (1-2 terms)
-#   keywords        - if ANY of these appear in a listing title/description,
-#                     it's considered a match for this console (lowercase)
-#   exclude         - ...UNLESS one of these also appears (prevents a plain
-#                     "Game Boy" bucket from swallowing "Game Boy Color" etc.)
-#   resale          - what YOU sell a refurbished unit for (PLACEHOLDER —
-#                     review these against your actual sold prices!)
-#   repair_cost     - your average parts+time cost to fix a broken unit
-#
-# The bot computes your max-buy prices from these numbers:
-#   max_buy_parts   = resale x (1 - fee_rate) - repair_cost - min_profit
-#   max_buy_working = resale x (1 - fee_rate) - refurb_cost_working - min_profit
-# (fee_rate, min_profit, refurb_cost_working live in settings.yaml)
+# enabled: false  -> bot ignores that console entirely
+# search_terms    -> what the bot types into eBay search (incl. misspellings)
+# keywords        -> match a listing to this console (lowercase substrings)
+# exclude         -> ...unless one of these also appears
+# model_numbers   -> stripped from titles BEFORE quantity parsing, so
+#                    "Lot of 5 AGS-101" doesn't parse as quantity 101
 # ============================================================================
+
+families:
+  gameboy:
+    name: "Game Boy line"
+    consoles: [gb_dmg, gb_color, gba, gba_sp]
+  ds:
+    name: "DS family"
+    consoles: [ds, ds_lite, dsi, n3ds, n2ds, new_3ds, new_2ds_xl]
 
 consoles:
 
   gb_dmg:
     name: "Game Boy (DMG)"
-    search_terms: ["game boy original console"]
-    keywords: ["game boy", "gameboy", "dmg-01", "dmg 01", "original gameboy"]
+    enabled: true
+    sell_price: 100
+    search_terms: ["game boy original console", "gameboy dmg for parts"]
+    keywords: ["game boy", "gameboy", "gamboy", "dmg-01", "dmg 01"]
     exclude: ["color", "colour", "advance", "pocket", "micro", "gba", "sp"]
-    resale: 85        # PLACEHOLDER - edit me
-    repair_cost: 15   # PLACEHOLDER - edit me
+    model_numbers: ["dmg-01", "dmg 01"]
 
   gb_color:
     name: "Game Boy Color"
-    search_terms: ["game boy color console"]
+    enabled: true
+    sell_price: 115
+    search_terms: ["game boy color console", "gameboy color for parts"]
     keywords: ["game boy color", "gameboy color", "game boy colour", "gbc", "cgb-001", "cgb 001"]
     exclude: []
-    resale: 75
-    repair_cost: 15
+    model_numbers: ["cgb-001", "cgb 001"]
 
   gba:
     name: "Game Boy Advance"
-    search_terms: ["game boy advance console"]
-    keywords: ["game boy advance", "gameboy advance", "gba", "agb-001", "agb 001"]
+    enabled: true
+    sell_price: 135
+    search_terms: ["game boy advance console", "gameboy advance lot"]
+    keywords: ["game boy advance", "gameboy advance", "game boy advanced", "gba", "agb-001", "agb 001", "advanve"]
     exclude: ["sp", "ags", "micro"]
-    resale: 70
-    repair_cost: 15
+    model_numbers: ["agb-001", "agb 001"]
 
   gba_sp:
     name: "GBA SP"
-    search_terms: ["game boy advance sp"]
+    enabled: true
+    sell_price: 160
+    search_terms: ["game boy advance sp", "gba sp for parts"]
     keywords: ["advance sp", "gba sp", "gameboy sp", "game boy sp", "ags-001", "ags-101", "ags 001", "ags 101"]
     exclude: []
-    resale: 95        # AGS-101 (bright screen) sells higher - consider splitting later
-    repair_cost: 20
+    model_numbers: ["ags-001", "ags-101", "ags 001", "ags 101"]
 
   ds:
     name: "Nintendo DS (original)"
+    enabled: true
+    sell_price: 115
     search_terms: ["nintendo ds console ntr-001"]
     keywords: ["ntr-001", "ntr 001", "ds phat", "original ds", "nintendo ds"]
-    exclude: ["lite", "dsi", "3ds", "2ds", "usg"]
-    resale: 45
-    repair_cost: 12
+    exclude: ["lite", "dsi", "3ds", "2ds", "usg", "dslite"]
+    model_numbers: ["ntr-001", "ntr 001"]
 
   ds_lite:
     name: "DS Lite"
-    search_terms: ["nintendo ds lite console"]
+    enabled: true
+    sell_price: 115
+    search_terms: ["nintendo ds lite console", "ds lite lot broken"]
     keywords: ["ds lite", "dslite", "usg-001", "usg 001"]
     exclude: []
-    resale: 65
-    repair_cost: 15
+    model_numbers: ["usg-001", "usg 001"]
 
   dsi:
     name: "DSi / DSi XL"
+    enabled: true
+    sell_price: 130
     search_terms: ["nintendo dsi console"]
     keywords: ["dsi", "twl-001", "twl 001", "utl-001", "utl 001"]
     exclude: []
-    resale: 55
-    repair_cost: 15
+    model_numbers: ["twl-001", "twl 001", "utl-001", "utl 001"]
 
   n3ds:
     name: "3DS / 3DS XL"
-    search_terms: ["nintendo 3ds console"]
+    enabled: true
+    sell_price: 175
+    search_terms: ["nintendo 3ds console", "3ds for parts repair"]
     keywords: ["3ds", "ctr-001", "ctr 001", "spr-001", "spr 001"]
     exclude: ["new 3ds", "new nintendo 3ds"]
-    resale: 110
-    repair_cost: 25
+    model_numbers: ["ctr-001", "ctr 001", "spr-001", "spr 001"]
 
   n2ds:
     name: "2DS"
+    enabled: true
+    sell_price: 175
     search_terms: ["nintendo 2ds console"]
     keywords: ["2ds", "ftr-001", "ftr 001"]
     exclude: ["new 2ds", "new nintendo 2ds", "xl"]
-    resale: 80
-    repair_cost: 20
+    model_numbers: ["ftr-001", "ftr 001"]
 
   new_3ds:
     name: "New 3DS / New 3DS XL"
+    enabled: true
+    sell_price: 225
     search_terms: ["new nintendo 3ds xl console"]
     keywords: ["new 3ds", "new nintendo 3ds", "ktr-001", "ktr 001", "red-001", "red 001"]
     exclude: []
-    resale: 180
-    repair_cost: 30
+    model_numbers: ["ktr-001", "ktr 001", "red-001", "red 001"]
 
   new_2ds_xl:
     name: "New 2DS XL"
+    enabled: true
+    sell_price: 225
     search_terms: ["new nintendo 2ds xl console"]
     keywords: ["new 2ds", "new nintendo 2ds", "jan-001", "jan 001"]
     exclude: []
-    resale: 140
-    repair_cost: 25
+    model_numbers: ["jan-001", "jan 001"]
