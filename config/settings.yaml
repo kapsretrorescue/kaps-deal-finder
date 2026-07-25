@@ -38,6 +38,26 @@ notify:
   instant_deals: true    # deals that beat your max-buy price ping Discord
                          # IMMEDIATELY; everything else waits for the digest
 
+# --- Accessory noise filter --------------------------------------------------
+# Listings whose title/description contains any of these are NOT consoles
+# (empty shells, chargers, manuals...) and are skipped for every console.
+# Trade-off: also skips "new shell installed" refurbs — those are rarely
+# underpriced anyway.
+matching:
+  exclude_always:
+    - "shell"
+    - "shells"
+    - "housing"
+    - "box only"
+    - "manual only"
+    - "charger only"
+    - "replacement screen"
+    - "screen replacement"
+    - "battery cover"
+    - "sticker"
+    - "decal"
+    - "empty box"
+
 # --- Condition language -----------------------------------------------------
 # Phrases that mark a listing as "for parts" vs "tested working".
 # Checked lowercase. Parts phrases win ties (e.g. "not working" won't be

@@ -40,11 +40,15 @@ class Analysis:
         return self.consoles[0] if self.consoles else None
 
 
-def match_consoles(text: str, consoles_cfg: dict) -> list[str]:
+def match_consoles(text: str, consoles_cfg: dict, exclude_always: list[str] | None = None) -> list[str]:
     """Return console keys whose keywords appear in text (minus exclusions).
 
     A lot listing ("Game Boy Color + DS Lite bundle") can match several.
+    exclude_always: accessory words (shells, chargers...) that disqualify a
+    listing for every console.
     """
+    if exclude_always and any(ex in text for ex in exclude_always):
+        return []
     matches = []
     for key, cfg in consoles_cfg.items():
         if any(kw in text for kw in cfg["keywords"]):
@@ -103,7 +107,10 @@ def analyze(listing: Listing, consoles_cfg: dict, settings: dict) -> Analysis:
     text = f"{listing.title} {listing.description}".lower()
 
     result = Analysis(listing=listing)
-    result.consoles = match_consoles(text, consoles_cfg)
+    result.consoles = match_consoles(
+        text, consoles_cfg,
+        settings.get("matching", {}).get("exclude_always"),
+    )
     if not result.consoles:
         return result  # not one of ours — caller will drop it
 
