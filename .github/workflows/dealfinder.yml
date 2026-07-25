@@ -13,7 +13,10 @@ name: deal-finder
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Hourly at :07 — deliberately NOT :00, which is GitHub's most congested
+    # scheduling minute and gets delayed/skipped the most. Expect the run to
+    # actually start a few minutes after :07.
+    - cron: "7 * * * *"
   workflow_dispatch:        # allows manual "Run workflow" button for testing
     inputs:
       mock:
