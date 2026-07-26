@@ -44,7 +44,13 @@ MAX_SANE_QTY = 30
 # "Bundle 15 Games" = 1 console + 15 games, NOT 15 consoles. Blank out
 # "<N> games/carts/manuals/styluses" before hunting for lot quantities.
 NON_CONSOLE_COUNTS = re.compile(
-    r"\b\d{1,3}\s+(?:games?|carts?|cartridges?|manuals?|stylus(?:es)?|cases?|chargers?)\b")
+    r"\b\d{1,3}\s+(games?|carts?|cartridges?|manuals?|stylus(?:es)?|cases?|chargers?)\b")
+# "Console Bundle Lot + 15 Games" is ONE console sold with extras, not a
+# multi-console lot. When a lot word appears alongside these and there's no
+# countable quantity, treat it as a single unit instead of flagging it.
+BUNDLE_EXTRAS = re.compile(
+    r"\b(games?|carts?|cartridges?|manuals?|case|cases|charger|chargers|"
+    r"stylus|styluses|cib|complete in box|inserts?|box)\b")
 
 
 @dataclass
@@ -115,7 +121,9 @@ def strip_console_names(text: str, consoles_cfg: dict) -> str:
 def extract_quantity(stripped: str) -> tuple[int, bool]:
     """(quantity, uncertain). Uncertain = lot words present but no count —
     default to 1 and flag for manual review rather than guessing."""
-    stripped = NON_CONSOLE_COUNTS.sub(" ", stripped)
+    # Drop the digits but KEEP the noun — "15 games" becomes " games ", so
+    # the bundle check below can still see it's an accessory lot.
+    stripped = NON_CONSOLE_COUNTS.sub(r" \1 ", stripped)
     for pat in QTY_PATTERNS:
         m = pat.search(stripped)
         if m:
@@ -124,6 +132,10 @@ def extract_quantity(stripped: str) -> tuple[int, bool]:
             if 2 <= qty <= MAX_SANE_QTY:
                 return qty, False
     if LOT_HINT.search(stripped):
+        # A "lot" of games/accessories around a single console isn't a
+        # quantity mystery — don't waste a manual-review flag on it.
+        if BUNDLE_EXTRAS.search(stripped):
+            return 1, False
         return 1, True
     return 1, False
 
