@@ -44,8 +44,8 @@ SETTABLE: dict[str, tuple] = {
     "pricing.parts_credit_per_dud":   ("settings", "num", 0, 100),
     "yield.default":                  ("settings", "num", 0.1, 1.0),
     "digest.interval_hours":          ("settings", "int", 1, 24),
-    "digest.per_family_min":          ("settings", "int", 1, 20),
-    "digest.per_family_max":          ("settings", "int", 1, 20),
+    "digest.top_n":                   ("settings", "int", 1, 25),
+    "digest.search_results":          ("settings", "int", 1, 25),
     "digest.lookback_hours":          ("settings", "int", 1, 168),
     "notify.instant_min_tier":        ("settings", "choice", ["great", "good"]),
     "notify.instant_max_per_run":     ("settings", "int", 1, 25),
@@ -54,6 +54,26 @@ SETTABLE: dict[str, tuple] = {
 }
 # Per-console: "<console_key>.sell_price"
 CONSOLE_FIELDS = {"sell_price": ("num", 1, 2000)}
+
+
+def normalize(name: str) -> str:
+    """'GBA-SP' / 'gba sp' / 'gba_sp' all become 'gbasp'."""
+    return "".join(ch for ch in name.lower() if ch.isalnum())
+
+
+def resolve_console(name: str, consoles: dict) -> str | None:
+    """Map whatever the user typed to a console key, via key or alias."""
+    want = normalize(name)
+    if not want:
+        return None
+    for key, cfg in consoles.items():
+        if normalize(key) == want:
+            return key
+        if any(normalize(a) == want for a in cfg.get("aliases", [])):
+            return key
+    # Last resort: unique prefix match ("gbas" -> gba_sp)
+    hits = [k for k in consoles if normalize(k).startswith(want)]
+    return hits[0] if len(hits) == 1 else None
 
 
 def _load(path: Path):
@@ -105,9 +125,11 @@ class CommandHandler:
     def _cmd_help(self) -> str:
         return (
             "**Deal finder commands**\n"
-            "`!scan` — scan eBay right now\n"
+            "`!scan` — scan every console right now\n"
+            "`!search <console>` — search one console, e.g. "
+            "`!search dslite`, `!search gba-sp`, `!search 3ds`\n"
             "`!settings` — current settings\n"
-            "`!consoles` — consoles, sell prices, on/off\n"
+            "`!consoles` — consoles, aliases, sell prices, on/off\n"
             "`!set <path> <value>` — change a setting\n"
             "`!enable <console>` / `!disable <console>`\n\n"
             "Examples:\n"
@@ -132,9 +154,8 @@ class CommandHandler:
             f"Screen repair penalty: **−${p['screen_repair_penalty']}**\n"
             f"Parts credit per dud: **${p['parts_credit_per_dud']}**\n"
             f"Default lot yield: **{y['default']:.0%}**\n"
-            f"Digest: every **{d['interval_hours']}h**, "
-            f"{d['per_family_min']}–{d['per_family_max']} per family, "
-            f"{d['lookback_hours']}h lookback\n"
+            f"Digest: every **{d['interval_hours']}h**, top **{d['top_n']}** "
+            f"deals, {d['lookback_hours']}h lookback\n"
             f"Instant alerts: **{n['instant_min_tier']}** and above, "
             f"max **{n['instant_max_per_run']}**/run\n"
             f"Auction 'ending soon' window: "
@@ -150,10 +171,13 @@ class CommandHandler:
         for key, cfg in c.items():
             mark = "✅" if cfg.get("enabled", True) else "⛔"
             sell = cfg["sell_price"]
+            aliases = ", ".join(cfg.get("aliases", [])) or key
             lines.append(
                 f"{mark} `{key}` {cfg['name']} — sell **${sell}** → "
                 f"${sell - r - t['marginal']:.0f} / ${sell - r - t['good']:.0f} / "
-                f"${sell - r - t['great']:.0f}")
+                f"${sell - r - t['great']:.0f}\n"
+                f"　　search as: `{aliases}`")
+        lines.append("\n_Search one with_ `!search <name>` _· scan all with_ `!scan`")
         return "\n".join(lines)
 
     def _cmd_set(self, args: list[str]) -> str:

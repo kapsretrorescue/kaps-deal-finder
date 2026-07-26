@@ -86,6 +86,19 @@ keywords:
     - "lines on screen"
     - "screen doesn't work"
     - "screen does not work"
+    - "needs new screen"
+    - "needs new top screen"
+    - "needs new bottom screen"
+    - "needs screen"
+    - "no top screen"
+    - "no bottom screen"
+    - "top screen broken"
+    - "bottom screen broken"
+    - "top screen cracked"
+    - "bottom screen cracked"
+    - "screen cracked"
+    - "screen damage"
+    - "screen issue"
 
   # Hard avoid: usually unrepairable or not worth the bench time
   avoid:
@@ -169,10 +182,10 @@ notify:
   instant_max_per_run: 8     # cap one run's instant ping to the N best;
                              # the rest still appear in the hourly digest
 digest:
-  interval_hours: 1          # hourly market pulse
-  per_family_min: 3          # aim to show 3-6 listings per console family
-  per_family_max: 6
+  interval_hours: 3          # scheduled market pulse, every N hours
+  top_n: 10                  # how many of the best deals the digest lists
   lookback_hours: 24         # digest picks the best from the last N hours
+  search_results: 10         # how many listings !search returns
 
 # --- Sources ----------------------------------------------------------------
 sources:

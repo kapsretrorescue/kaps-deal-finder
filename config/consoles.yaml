@@ -5,6 +5,8 @@
 # (refurb_cost and the $25/$40/$50 profit tiers live in settings.yaml)
 #
 # enabled: false  -> bot ignores that console entirely
+# aliases         -> what you can type after !search (spaces, hyphens and
+#                    underscores are ignored, so "gba-sp" = "gba sp" = "gbasp")
 # search_terms    -> what the bot types into eBay search (incl. misspellings)
 # keywords        -> match a listing to this console (lowercase substrings)
 # exclude         -> ...unless one of these also appears
@@ -18,12 +20,14 @@ families:
     consoles: [gb_dmg, gb_color, gba, gba_sp]
   ds:
     name: "DS family"
+    aliases: ["ds", "dsphat", "phat"]
     consoles: [ds, ds_lite, dsi, n3ds, n2ds, new_3ds, new_2ds_xl]
 
 consoles:
 
   gb_dmg:
     name: "Game Boy (DMG)"
+    aliases: ["dmg", "gameboy", "gb", "original"]
     enabled: true
     sell_price: 100
     search_terms: ["game boy original console", "gameboy dmg for parts"]
@@ -33,6 +37,7 @@ consoles:
 
   gb_color:
     name: "Game Boy Color"
+    aliases: ["gbc", "color", "colour"]
     enabled: true
     sell_price: 115
     search_terms: ["game boy color console", "gameboy color for parts"]
@@ -42,6 +47,7 @@ consoles:
 
   gba:
     name: "Game Boy Advance"
+    aliases: ["gba", "advance"]
     enabled: true
     sell_price: 135
     search_terms: ["game boy advance console", "gameboy advance lot"]
@@ -51,6 +57,7 @@ consoles:
 
   gba_sp:
     name: "GBA SP"
+    aliases: ["gbasp", "sp", "ags"]
     enabled: true
     sell_price: 160
     search_terms: ["game boy advance sp", "gba sp for parts"]
@@ -69,6 +76,7 @@ consoles:
 
   ds_lite:
     name: "DS Lite"
+    aliases: ["dslite", "lite", "usg"]
     enabled: true
     sell_price: 115
     search_terms: ["nintendo ds lite console", "ds lite lot broken"]
@@ -78,6 +86,7 @@ consoles:
 
   dsi:
     name: "DSi / DSi XL"
+    aliases: ["dsi", "dsixl"]
     enabled: true
     sell_price: 130
     search_terms: ["nintendo dsi console"]
@@ -87,6 +96,7 @@ consoles:
 
   n3ds:
     name: "3DS / 3DS XL"
+    aliases: ["3ds", "3dsxl"]
     enabled: true
     sell_price: 175
     search_terms: ["nintendo 3ds console", "3ds for parts repair"]
@@ -96,6 +106,7 @@ consoles:
 
   n2ds:
     name: "2DS"
+    aliases: ["2ds"]
     enabled: true
     sell_price: 175
     search_terms: ["nintendo 2ds console"]
@@ -105,6 +116,7 @@ consoles:
 
   new_3ds:
     name: "New 3DS / New 3DS XL"
+    aliases: ["new3ds", "new3dsxl", "n3dsxl"]
     enabled: true
     sell_price: 225
     search_terms: ["new nintendo 3ds xl console"]
@@ -114,6 +126,7 @@ consoles:
 
   new_2ds_xl:
     name: "New 2DS XL"
+    aliases: ["new2ds", "new2dsxl"]
     enabled: true
     sell_price: 225
     search_terms: ["new nintendo 2ds xl console"]

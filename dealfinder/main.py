@@ -27,7 +27,7 @@ import yaml
 from dotenv import load_dotenv
 
 from . import analysis, digest
-from .commands import CommandHandler
+from .commands import CommandHandler, resolve_console
 from .db import Database
 from .notify import discord as notify_discord
 from .notify import email_notify
@@ -71,21 +71,30 @@ def load_config() -> tuple[dict, dict, dict]:
     return settings, doc["consoles"], doc["families"]
 
 
-def process_commands(db: Database, opts: RunOpts, log) -> bool:
-    """Read and apply any Discord !commands. Returns True if a scan was
-    explicitly requested with !scan."""
+def process_commands(db: Database, opts: RunOpts, log) -> list[str]:
+    """Read and apply Discord !commands.
+
+    Returns the console names from any `!search <console>` requests, so the
+    caller can run them (searches need a scan, which lives here, not in the
+    command handler).
+    """
     if opts.mock:
-        return False
-    scan_requested = False
+        return []
+    searches: list[str] = []
     try:
         contents, newest = notify_discord.read_commands(db.get_meta("last_command_id"))
         handler = CommandHandler(PROJECT_ROOT / "config")
         replies = []
         for content in contents:
-            if content.strip().lower().startswith("!scan"):
-                scan_requested = True
+            text = content.strip()
+            low = text.lower()
+            if low.startswith("!scan"):
+                continue                        # a scan happens anyway
+            if low.startswith("!search"):
+                parts = text.split(maxsplit=1)
+                searches.append(parts[1] if len(parts) > 1 else "")
                 continue
-            reply = handler.handle(content)
+            reply = handler.handle(text)
             if reply:
                 replies.append(reply)
         if newest:
@@ -98,7 +107,56 @@ def process_commands(db: Database, opts: RunOpts, log) -> bool:
                 notify_discord.send("\n\n".join(replies))
     except Exception as e:
         log.error("Command handling failed: %s", e)
-    return scan_requested
+    return searches
+
+
+def run_search(db: Database, name: str, opts: RunOpts, log) -> str:
+    """On-demand `!search <console>`: hit eBay for ONE console and return the
+    best current listings ranked by estimated profit.
+
+    Unlike the scheduled scan this ignores 'already notified' — you asked to
+    see what's out there right now, including listings you've been shown
+    before.
+    """
+    settings, consoles, _ = load_config()
+    key = resolve_console(name, consoles)
+    if not key:
+        options = ", ".join(f"`{a}`" for c in consoles.values()
+                            for a in (c.get("aliases") or [])[:1])
+        return f"❌ Don't know console `{name}`. Try one of: {options}\nOr `!consoles`."
+
+    cfg = consoles[key]
+    log.info("Searching eBay for %s", cfg["name"])
+    # Only this console's search terms, but score against the FULL config so
+    # exclusions still work (e.g. a GBA SP listing won't count as plain GBA).
+    listings = ebay.fetch({key: cfg}, settings)
+
+    matched_ids = []
+    for listing in listings:
+        result = analysis.analyze(listing, consoles, settings)
+        if result.excluded_reason or key not in result.consoles:
+            continue
+        if db.is_seen(listing.source, listing.listing_id):
+            db.refresh_price(result)      # keep auction prices current
+        else:
+            db.add(result)
+        matched_ids.append(listing.listing_id)
+
+    if not matched_ids:
+        return digest.build_search([], cfg["name"], consoles, settings["pricing"])
+
+    limit = settings["digest"].get("search_results", 10)
+    marks = ",".join("?" * len(matched_ids))
+    rows = db.conn.execute(
+        f"""SELECT * FROM listings WHERE listing_id IN ({marks})
+            ORDER BY CASE tier WHEN 'great' THEN 0 WHEN 'good' THEN 1
+                               WHEN 'marginal' THEN 2 WHEN 'skip' THEN 3
+                               ELSE 4 END,
+                     est_profit DESC
+            LIMIT ?""",
+        (*matched_ids, limit),
+    ).fetchall()
+    return digest.build_search(rows, cfg["name"], consoles, settings["pricing"])
 
 
 def run_scan(db: Database, opts: RunOpts, log) -> None:
@@ -229,7 +287,13 @@ def main() -> None:
     db = Database(PROJECT_ROOT / "data" / "dealfinder.db")
 
     # Commands first, so a config change applies to this very scan
-    process_commands(db, opts, log)
+    searches = process_commands(db, opts, log)
+    for name in searches:
+        result = run_search(db, name, opts, log)
+        if opts.dry_run:
+            print(result)
+        else:
+            notify_discord.send(result)
     run_scan(db, opts, log)
 
 

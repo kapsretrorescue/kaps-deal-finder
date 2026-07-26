@@ -23,7 +23,7 @@ from dotenv import load_dotenv
 
 from .commands import CommandHandler
 from .db import Database
-from .main import PROJECT_ROOT, RunOpts, process_commands, run_scan, setup_logging
+from .main import PROJECT_ROOT, RunOpts, run_scan, run_search, setup_logging
 from .notify import discord as notify_discord
 
 POLL_SECONDS = 5          # how often to check Discord for new messages
@@ -78,8 +78,9 @@ def main() -> None:
                     continue
                 log.info("Command: %s", text[:80])
 
-                if text.lower().startswith("!scan"):
-                    notify_discord.send("🔍 Scanning eBay now — one moment…")
+                low = text.lower()
+                if low.startswith("!scan"):
+                    notify_discord.send("🔍 Scanning every console — one moment…")
                     try:
                         # send_now so results come back immediately rather
                         # than waiting for the digest interval
@@ -88,6 +89,21 @@ def main() -> None:
                     except Exception as e:
                         log.error("Scan failed: %s", e)
                         notify_discord.send(f"❌ Scan failed: `{e}`")
+                    continue
+
+                if low.startswith("!search"):
+                    parts = text.split(maxsplit=1)
+                    if len(parts) < 2:
+                        notify_discord.send(
+                            "❌ Usage: `!search <console>` — e.g. `!search dslite`. "
+                            "`!consoles` lists the names.")
+                        continue
+                    notify_discord.send(f"🔍 Searching **{parts[1]}** — one moment…")
+                    try:
+                        notify_discord.send(run_search(db, parts[1], RunOpts(), log))
+                    except Exception as e:
+                        log.error("Search failed: %s", e)
+                        notify_discord.send(f"❌ Search failed: `{e}`")
                     continue
 
                 reply = handler.handle(text)

@@ -83,8 +83,9 @@ def format_row(row, consoles_cfg: dict, pricing: dict) -> str:
         lines.append(f"Max buy (@$25/$40/$50 profit): {_maxes(row, consoles_cfg, pricing)}")
         profit = f"Est. profit: ~${row['est_profit']:.0f}/good unit"
         if qty > 1:
+            n = row["good_units"]
             profit += (f" · ~${row['est_profit_total']:.0f} total "
-                       f"({row['good_units']} units)")
+                       f"({n} good unit{'s' if n != 1 else ''} expected)")
         if row["screen_issue"]:
             profit += " (screen repair −$45 applied)"
         lines.append(profit)
@@ -116,33 +117,48 @@ def build_instant(rows, consoles_cfg: dict, pricing: dict) -> str:
     return "\n\n".join([header] + [format_row(r, consoles_cfg, pricing) for r in rows])
 
 
+def build_search(rows, console_name: str, consoles_cfg: dict, pricing: dict) -> str:
+    """Results of an on-demand `!search <console>`, best profit first.
+
+    Unlike alerts this shows what's out there even when nothing clears the
+    profit bar — 'nothing good right now' is useful information too.
+    """
+    if not rows:
+        return (f"🔍 **{console_name}** — nothing on eBay matched right now.\n"
+                "_Try again later, or check the console's `search_terms` in "
+                "`consoles.yaml` if this keeps coming up empty._")
+
+    deals = [r for r in rows if r["tier"] in ("great", "good", "marginal")]
+    header = (f"## 🔍 {console_name} — {len(deals)} deal(s) in the "
+              f"{len(rows)} best current listings\n") if deals else (
+              f"## 🔍 {console_name} — no deals right now\n"
+              "_Nothing clears your minimum profit. Closest listings:_\n")
+    return "\n\n".join(
+        [header] + [f"**#{i}** · " + format_row(r, consoles_cfg, pricing)
+                    for i, r in enumerate(rows, 1)])
+
+
 def build_digest(rows, consoles_cfg: dict, settings: dict) -> str:
-    """Hourly market pulse: the best 3-6 recent listings per console family."""
-    families = consoles_cfg["_families"]
+    """Scheduled market pulse: the N best deals across every console.
+
+    `rows` arrives already ranked (great -> good -> marginal, then by total
+    estimated profit), so the top slice is simply the best of the window.
+    """
     pricing = settings["pricing"]
-    cap = settings["digest"]["per_family_max"]
+    d = settings["digest"]
+    top_n = d.get("top_n", 10)
     consoles = {k: v for k, v in consoles_cfg.items() if k != "_families"}
 
-    console_to_family = {}
-    for fam_key, fam in families.items():
-        for c in fam["consoles"]:
-            console_to_family[c] = fam_key
+    ranked = [r for r in rows if r["tier"] != "no_price"][:top_n]
 
     sections = []
     shown = set()
-    for fam_key, fam in families.items():
-        fam_rows = []
-        for r in rows:
-            primary = (r["consoles"] or "").split(",")[0]
-            if console_to_family.get(primary) == fam_key and r["tier"] != "no_price":
-                fam_rows.append(r)
-        fam_rows = fam_rows[:cap]
-        if fam_rows:
-            sections.append(f"## 🎮 {fam['name']} — best of the last "
-                            f"{settings['digest']['lookback_hours']}h\n")
-            for r in fam_rows:
-                sections.append(format_row(r, consoles, pricing))
-                shown.add((r["source"], r["listing_id"]))
+    if ranked:
+        sections.append(f"## 🏆 Top {len(ranked)} deals — last "
+                        f"{d['lookback_hours']}h, all consoles\n")
+        for i, r in enumerate(ranked, 1):
+            sections.append(f"**#{i}** · " + format_row(r, consoles, pricing))
+            shown.add((r["source"], r["listing_id"]))
 
     # Possible lots where we couldn't parse a count: a "DS Lite Console Lot"
     # priced like 3 units looks terrible as 1 unit — human eyes needed.
