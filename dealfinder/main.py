@@ -26,6 +26,7 @@ import yaml
 from dotenv import load_dotenv
 
 from . import analysis, digest
+from .commands import CommandHandler
 from .db import Database
 from .notify import discord as notify_discord
 from .notify import email_notify
@@ -64,11 +65,33 @@ def main() -> None:
     log = logging.getLogger("dealfinder")
     load_dotenv(PROJECT_ROOT / ".env")
 
+    db_early = Database(PROJECT_ROOT / "data" / "dealfinder.db")
+
+    # ---- 0. Discord commands (!settings etc.) -----------------------------
+    # Read BEFORE loading config, so a command typed since the last run takes
+    # effect on this run. Needs DISCORD_BOT_TOKEN; silently skipped without it.
+    if not args.mock:
+        try:
+            contents, newest = notify_discord.read_commands(
+                db_early.get_meta("last_command_id"))
+            handler = CommandHandler(PROJECT_ROOT / "config")
+            replies = [r for c in contents if (r := handler.handle(c))]
+            if newest:
+                db_early.set_meta("last_command_id", newest)
+            if replies:
+                log.info("Handled %d Discord command(s)", len(replies))
+                if args.dry_run:
+                    print("\n".join(replies))
+                else:
+                    notify_discord.send("\n\n".join(replies))
+        except Exception as e:
+            log.error("Command handling failed: %s", e)
+
     settings = load_yaml("settings.yaml")
     consoles_doc = load_yaml("consoles.yaml")
     consoles = consoles_doc["consoles"]
     families = consoles_doc["families"]
-    db = Database(PROJECT_ROOT / "data" / "dealfinder.db")
+    db = db_early
 
     # ---- 1. Fetch ---------------------------------------------------------
     enabled = ["mock"] if args.mock else [

@@ -134,6 +134,17 @@ class Database:
             (cutoff,),
         ).fetchall()
 
+    # --- generic meta key/value --------------------------------------------
+    def get_meta(self, key: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.conn.execute(
+            "INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+        self.conn.commit()
+
     # --- digest timing -----------------------------------------------------
     def last_digest(self) -> datetime | None:
         row = self.conn.execute(
