@@ -13,10 +13,12 @@ name: deal-finder
 
 on:
   schedule:
-    # Every 3 hours at :07 — deliberately NOT :00, which is GitHub's most
-    # congested scheduling minute and gets delayed/skipped the most. Expect
-    # the run to actually start a few minutes after :07.
+    # Full scan every 3 hours at :07 — deliberately NOT :00, which is
+    # GitHub's most congested minute and gets delayed/skipped the most.
     - cron: "7 */3 * * *"
+    # Cheap hourly sweep of auctions only, so an auction's final window
+    # can't fall entirely between two full scans.
+    - cron: "37 * * * *"
   workflow_dispatch:        # allows manual "Run workflow" button for testing
     inputs:
       mock:
@@ -55,7 +57,13 @@ jobs:
           REDDIT_USER_AGENT: "github-actions:kaps-deal-finder:v1.0"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-        run: python -m dealfinder.main ${{ inputs.mock && '--mock' || '' }}
+        run: |
+          # The :37 schedule is the cheap auctions-only sweep.
+          if [ "${{ github.event.schedule }}" = "37 * * * *" ]; then
+            python -m dealfinder.main --auctions-only
+          else
+            python -m dealfinder.main ${{ inputs.mock && '--mock' || '' }}
+          fi
 
       # Database keeps dedup memory; config may have changed via !set commands
       - name: Commit database and any config changes

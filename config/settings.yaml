@@ -192,7 +192,15 @@ sources:
   ebay:
     enabled: true
     max_results_per_search: 50
-    ending_soon_hours: 2     # re-alert auctions ending within this window
+    ending_soon_hours: 4     # auctions alert once inside this window
+    # Your ZIP — eBay needs a destination to quote shipping. Without it most
+    # listings come back "+? ship" and lots look cheaper than they are.
+    # Change with:  !set sources.ebay.ship_to_zip 64111
+    ship_to_zip: "64111"
+    # Listings that clear the profit bar get their FULL description pulled and
+    # re-scored, because red flags ("water damage") are usually in the body
+    # text, not the title. Capped to protect the 5,000 calls/day quota.
+    detail_fetch_max: 40
   reddit:
     enabled: true
     subreddits: ["hardwareswap"]

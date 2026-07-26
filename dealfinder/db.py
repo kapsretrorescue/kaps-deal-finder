@@ -25,6 +25,24 @@ CREATE TABLE IF NOT EXISTS meta (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+-- What you actually bought and sold, so estimates can be checked against
+-- reality instead of trusted forever.
+CREATE TABLE IF NOT EXISTS purchases (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    listing_id   TEXT,
+    url          TEXT,
+    title        TEXT,
+    consoles     TEXT,
+    quantity     INTEGER,
+    paid         REAL,          -- what you actually paid, all in
+    est_unit     REAL,          -- what the bot predicted per good unit
+    est_total    REAL,
+    est_good     INTEGER,       -- units the bot expected to be salvageable
+    bought_at    TEXT,
+    sold_total   REAL,          -- what you actually got back
+    units_sold   INTEGER,
+    sold_at      TEXT
+);
 """
 
 # Columns added over time — applied via ALTER TABLE so existing databases
@@ -133,6 +151,49 @@ class Database:
                         est_profit_total DESC""",
             (cutoff,),
         ).fetchall()
+
+    # --- purchase tracking -------------------------------------------------
+    def find_listing(self, needle: str):
+        """Match a listing by URL fragment or eBay item number."""
+        needle = needle.strip().rstrip("/")
+        row = self.conn.execute(
+            "SELECT * FROM listings WHERE url = ?", (needle,)).fetchone()
+        if row:
+            return row
+        # eBay URLs look like .../itm/123456789?extra=... — pull the number
+        import re
+        m = re.search(r"/itm/(\d+)", needle) or re.fullmatch(r"(\d{9,})", needle)
+        if m:
+            frag = f"/itm/{m.group(1)}"
+            return self.conn.execute(
+                "SELECT * FROM listings WHERE url LIKE ?", (f"%{frag}%",)).fetchone()
+        return None
+
+    def add_purchase(self, row, paid: float) -> int:
+        cur = self.conn.execute(
+            """INSERT INTO purchases
+               (listing_id, url, title, consoles, quantity, paid,
+                est_unit, est_total, est_good, bought_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (row["listing_id"], row["url"], row["title"], row["consoles"],
+             row["quantity"], paid, row["est_profit"], row["est_profit_total"],
+             row["good_units"], datetime.now(timezone.utc).isoformat()))
+        self.conn.commit()
+        return cur.lastrowid
+
+    def mark_sold(self, purchase_id: int, total: float, units: int | None):
+        cur = self.conn.execute(
+            """UPDATE purchases SET sold_total=?, units_sold=?, sold_at=?
+               WHERE id=? AND sold_total IS NULL""",
+            (total, units, datetime.now(timezone.utc).isoformat(), purchase_id))
+        self.conn.commit()
+        return cur.rowcount
+
+    def purchases(self, only_open: bool = False):
+        q = "SELECT * FROM purchases"
+        if only_open:
+            q += " WHERE sold_total IS NULL"
+        return self.conn.execute(q + " ORDER BY id DESC").fetchall()
 
     # --- generic meta key/value --------------------------------------------
     def get_meta(self, key: str) -> str | None:

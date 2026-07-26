@@ -51,6 +51,8 @@ SETTABLE: dict[str, tuple] = {
     "notify.instant_max_per_run":     ("settings", "int", 1, 25),
     "sources.ebay.ending_soon_hours": ("settings", "int", 1, 48),
     "sources.ebay.max_results_per_search": ("settings", "int", 1, 200),
+    "sources.ebay.detail_fetch_max":  ("settings", "int", 0, 100),
+    "sources.ebay.ship_to_zip":       ("settings", "zip", None, None),
 }
 # Per-console: "<console_key>.sell_price"
 CONSOLE_FIELDS = {"sell_price": ("num", 1, 2000)}
@@ -99,6 +101,10 @@ def _coerce(kind, spec, raw: str):
         if raw.lower() not in spec:
             return None, f"must be one of: {', '.join(spec)}"
         return raw.lower(), None
+    if kind == "zip":
+        if not (raw.isdigit() and len(raw) == 5):
+            return None, "must be a 5-digit US ZIP code"
+        return raw, None
     low, high = spec
     try:
         val = int(raw) if kind == "int" else float(raw)
@@ -113,8 +119,9 @@ def _coerce(kind, spec, raw: str):
 
 
 class CommandHandler:
-    def __init__(self, config_dir: Path):
+    def __init__(self, config_dir: Path, db=None):
         self.config_dir = config_dir
+        self.db = db          # needed only for !bought / !sold / !stats
         self.paths = {
             "settings": config_dir / "settings.yaml",
             "consoles": config_dir / "consoles.yaml",
@@ -131,7 +138,10 @@ class CommandHandler:
             "`!settings` — current settings\n"
             "`!consoles` — consoles, aliases, sell prices, on/off\n"
             "`!set <path> <value>` — change a setting\n"
-            "`!enable <console>` / `!disable <console>`\n\n"
+            "`!enable <console>` / `!disable <console>`\n"
+            "`!bought <url> <price>` — log a purchase\n"
+            "`!sold <#> <total>` — close it out\n"
+            "`!stats` — are the bot's estimates actually right?\n\n"
             "Examples:\n"
             "`!set pricing.refurb_cost 42`\n"
             "`!set yield.default 0.8`\n"
@@ -237,6 +247,98 @@ class CommandHandler:
         return (f"✅ Now **{word}** {doc['consoles'][key]['name']} (`{key}`)\n"
                 f"_Applies on the next scan._")
 
+    # --- purchase tracking -------------------------------------------------
+    def _cmd_bought(self, args: list[str]) -> str:
+        if not self.db:
+            return "❌ Purchase tracking needs the database (run via the bot)."
+        if len(args) < 2:
+            return ("❌ Usage: `!bought <listing url> <what you paid>`\n"
+                    "e.g. `!bought https://www.ebay.com/itm/123456789 114.00`")
+        url, raw = args[0], args[1].lstrip("$")
+        try:
+            paid = float(raw)
+        except ValueError:
+            return f"❌ `{raw}` isn't a price."
+        row = self.db.find_listing(url)
+        if not row:
+            return ("❌ I don't have that listing on file — it has to be one "
+                    "the bot showed you. Paste the eBay link from the alert.")
+        pid = self.db.add_purchase(row, paid)
+        est = row["est_profit"]
+        est_txt = f"predicted ~${est:.0f}/unit" if est is not None else "no estimate on file"
+        return (f"📦 Logged purchase **#{pid}** — ${paid:.2f}\n"
+                f"_{row['title'][:90]}_\n"
+                f"Bot {est_txt}. When you've sold them: "
+                f"`!sold {pid} <total received>`")
+
+    def _cmd_sold(self, args: list[str]) -> str:
+        if not self.db:
+            return "❌ Purchase tracking needs the database (run via the bot)."
+        if len(args) < 2:
+            return "❌ Usage: `!sold <purchase #> <total received> [units]`"
+        try:
+            pid = int(args[0].lstrip("#"))
+            total = float(args[1].lstrip("$"))
+        except ValueError:
+            return "❌ Usage: `!sold <purchase #> <total received> [units]`"
+        units = None
+        if len(args) > 2:
+            try:
+                units = int(args[2])
+            except ValueError:
+                pass
+        if not self.db.mark_sold(pid, total, units):
+            return f"❌ No open purchase **#{pid}** (already sold, or wrong number)."
+        p = [x for x in self.db.purchases() if x["id"] == pid][0]
+        actual = total - p["paid"]
+        est = p["est_total"]
+        line = f"💰 Purchase **#{pid}** closed — ${total:.2f} in, ${p['paid']:.2f} out → **${actual:.2f}** profit"
+        if est is not None:
+            diff = actual - est
+            verdict = "better than" if diff > 0 else "under"
+            line += f"\nBot predicted ~${est:.0f} — {verdict} estimate by ${abs(diff):.0f}."
+        return line + "\n_`!stats` for the running picture._"
+
+    def _cmd_stats(self) -> str:
+        if not self.db:
+            return "❌ Stats need the database (run via the bot)."
+        rows = self.db.purchases()
+        if not rows:
+            return ("📊 Nothing logged yet.\n"
+                    "Log a buy with `!bought <url> <price>`, close it with "
+                    "`!sold <#> <total>`. After a few flips this tells you "
+                    "whether the bot's estimates match reality.")
+        closed = [r for r in rows if r["sold_total"] is not None]
+        open_ = [r for r in rows if r["sold_total"] is None]
+        spent = sum(r["paid"] for r in rows)
+        lines = [f"📊 **{len(rows)}** purchase(s) · ${spent:.2f} spent"]
+        if closed:
+            got = sum(r["sold_total"] for r in closed)
+            paid = sum(r["paid"] for r in closed)
+            est = sum(r["est_total"] or 0 for r in closed)
+            actual = got - paid
+            lines.append(f"**Closed {len(closed)}:** ${got:.2f} in − ${paid:.2f} out "
+                         f"= **${actual:.2f}** profit")
+            if est:
+                ratio = actual / est
+                lines.append(f"Bot predicted ${est:.0f} → reality is "
+                             f"**{ratio:.0%}** of estimate")
+                if ratio < 0.75:
+                    lines.append("_Estimates are running hot. Consider a lower "
+                                 "`yield.default` or higher `pricing.refurb_cost`._")
+                elif ratio > 1.25:
+                    lines.append("_Estimates are conservative — you could bid higher._")
+            if any(r["units_sold"] for r in closed):
+                exp = sum(r["est_good"] or 0 for r in closed)
+                got_u = sum(r["units_sold"] or 0 for r in closed)
+                if exp:
+                    lines.append(f"Units: expected {exp}, actually sold {got_u} "
+                                 f"(**{got_u / exp:.0%}** of predicted yield)")
+        if open_:
+            lines.append(f"**Open {len(open_)}:** "
+                         + ", ".join(f"#{r['id']} ${r['paid']:.0f}" for r in open_[:8]))
+        return "\n".join(lines)
+
     # --- entry point -------------------------------------------------------
     def handle(self, content: str) -> str | None:
         """Returns a reply string, or None if this isn't a command."""
@@ -260,6 +362,12 @@ class CommandHandler:
                 return self._cmd_toggle(args, True)
             if cmd == "disable":
                 return self._cmd_toggle(args, False)
+            if cmd == "bought":
+                return self._cmd_bought(args)
+            if cmd == "sold":
+                return self._cmd_sold(args)
+            if cmd == "stats":
+                return self._cmd_stats()
         except Exception as e:                    # noqa: BLE001
             log.error("Command %r failed: %s", text, e)
             return f"❌ `{text}` failed: {e}"

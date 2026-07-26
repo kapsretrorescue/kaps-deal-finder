@@ -43,6 +43,7 @@ class RunOpts:
     mock: bool = False
     dry_run: bool = False
     send_now: bool = False       # ignore the digest interval
+    auctions_only: bool = False  # cheap pass: only auctions nearing their end
 
 
 def setup_logging() -> None:
@@ -83,7 +84,7 @@ def process_commands(db: Database, opts: RunOpts, log) -> list[str]:
     searches: list[str] = []
     try:
         contents, newest = notify_discord.read_commands(db.get_meta("last_command_id"))
-        handler = CommandHandler(PROJECT_ROOT / "config")
+        handler = CommandHandler(PROJECT_ROOT / "config", db)
         replies = []
         for content in contents:
             text = content.strip()
@@ -170,16 +171,52 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
     listings = []
     for name in enabled:
         try:
-            listings.extend(SOURCE_MODULES[name].fetch(consoles, settings))
+            if name == "ebay":
+                listings.extend(ebay.fetch(consoles, settings,
+                                           auctions_only=opts.auctions_only))
+            elif not opts.auctions_only:
+                listings.extend(SOURCE_MODULES[name].fetch(consoles, settings))
         except Exception as e:
             log.error("Source %s crashed: %s", name, e)
 
+    # ---- 1b. Enrich the shortlist with full descriptions -------------------
+    # Search results carry only a condition label. Anything the seller
+    # disclosed in the body text is invisible until we pull the item — and
+    # that's exactly where "water damage" tends to live. Only fetch details
+    # for listings that look like deals on title alone, to save quota.
+    if not opts.mock:
+        shortlist = []
+        for listing in listings:
+            if listing.source != "ebay" or listing.price is None:
+                continue
+            first = analysis.analyze(listing, consoles, settings)
+            if first.consoles and not first.excluded_reason and \
+                    first.tier in ("great", "good", "marginal"):
+                shortlist.append(listing)
+        if shortlist:
+            try:
+                details = ebay.fetch_descriptions(
+                    [l.listing_id for l in shortlist], settings)
+                for listing in shortlist:
+                    extra = details.get(listing.listing_id)
+                    if extra:
+                        listing.description = f"{listing.description} {extra}"
+            except Exception as e:
+                log.warning("Description fetch failed: %s", e)
+
     # ---- 2. Score ---------------------------------------------------------
     new_matches = 0
+    dropped_on_detail = 0
     ending_realerts = []
     for listing in listings:
         result = analysis.analyze(listing, consoles, settings)
-        if result.excluded_reason or not result.consoles:
+        if result.excluded_reason:
+            # A red flag found only in the body text — worth counting, since
+            # this is the whole point of pulling descriptions.
+            if listing.description and "red flag" in result.excluded_reason:
+                dropped_on_detail += 1
+            continue
+        if not result.consoles:
             continue
         if not db.is_seen(listing.source, listing.listing_id):
             db.add(result)
@@ -191,8 +228,9 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
             if row and not row["ending_notified"]:
                 db.refresh_price(result)
                 ending_realerts.append((listing.source, listing.listing_id))
-    log.info("%d listings fetched, %d new matches stored, %d ending-soon re-alerts",
-             len(listings), new_matches, len(ending_realerts))
+    log.info("%d listings fetched, %d new matches stored, %d ending-soon "
+             "re-alerts, %d rejected on description",
+             len(listings), new_matches, len(ending_realerts), dropped_on_detail)
 
     # ---- 3. Instant alerts ------------------------------------------------
     def _alertable_now(row) -> bool:
@@ -238,6 +276,9 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
                 log.warning("Instant alert failed; will retry next run.")
 
     # ---- 4. Digest --------------------------------------------------------
+    if opts.auctions_only:
+        return          # the hourly auction sweep never sends a digest
+
     if not (opts.send_now or opts.dry_run):
         last = db.last_digest()
         if last is not None:
@@ -279,14 +320,21 @@ def main() -> None:
     parser.add_argument("--mock", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--send-now", action="store_true")
+    parser.add_argument("--auctions-only", action="store_true",
+                        help="cheap pass: only auctions nearing their end")
     args = parser.parse_args()
 
     setup_logging()
     log = logging.getLogger("dealfinder")
     load_dotenv(PROJECT_ROOT / ".env")
 
-    opts = RunOpts(mock=args.mock, dry_run=args.dry_run, send_now=args.send_now)
+    opts = RunOpts(mock=args.mock, dry_run=args.dry_run, send_now=args.send_now,
+                   auctions_only=args.auctions_only)
     db = Database(PROJECT_ROOT / "data" / "dealfinder.db")
+
+    if opts.auctions_only:          # quick sweep: no commands, no digest
+        run_scan(db, opts, log)
+        return
 
     # Commands first, so a config change applies to this very scan
     searches = process_commands(db, opts, log)

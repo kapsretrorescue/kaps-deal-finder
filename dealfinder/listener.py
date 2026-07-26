@@ -30,24 +30,46 @@ POLL_SECONDS = 5          # how often to check Discord for new messages
 IDLE_SCAN_MINUTES = 0     # 0 = never auto-scan here (the cloud does that)
 
 
-def push_config(log) -> None:
-    """Best-effort: commit and push config so the cloud honours the change."""
-    def git(*args) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=PROJECT_ROOT,
-                              capture_output=True, text=True, timeout=120)
+def _git(*args) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], cwd=PROJECT_ROOT,
+                          capture_output=True, text=True, timeout=120)
+
+
+def pull_latest(log) -> None:
+    """Take the cloud's database before doing local work.
+
+    The cloud commits its database after every run. Pulling first means the
+    listener shares the cloud's memory of what you've already been shown,
+    instead of keeping a divergent copy that re-alerts old listings.
+    On conflict the cloud wins — it runs far more often.
+    """
     try:
-        git("add", "config/settings.yaml", "config/consoles.yaml")
-        if git("diff", "--cached", "--quiet").returncode == 0:
-            return                                   # nothing changed
-        git("commit", "-m", "config update via Discord command")
-        git("pull", "--rebase", "-q")
-        result = git("push", "-q")
-        if result.returncode == 0:
-            log.info("Config change pushed to GitHub")
-        else:
-            log.warning("Config push failed: %s", result.stderr.strip()[:200])
+        if _git("pull", "--rebase", "-q").returncode != 0:
+            _git("rebase", "--abort")
+            _git("checkout", "--theirs", "data/dealfinder.db")
+            _git("reset", "--hard", "origin/main")
+            log.info("Database conflicted; took the cloud's copy.")
     except Exception as e:
-        log.warning("Could not push config change: %s", e)
+        log.warning("Could not sync from GitHub: %s", e)
+
+
+def push_state(log, message: str = "sync from local listener") -> None:
+    """Push config and database so the cloud sees local changes."""
+    try:
+        _git("add", "config/settings.yaml", "config/consoles.yaml",
+             "data/dealfinder.db")
+        if _git("diff", "--cached", "--quiet").returncode == 0:
+            return                                   # nothing changed
+        _git("commit", "-m", message)
+        _git("pull", "--rebase", "-q")
+        result = _git("push", "-q")
+        if result.returncode == 0:
+            log.info("Pushed local state to GitHub")
+        else:
+            log.warning("Push failed (cloud will resync next run): %s",
+                        result.stderr.strip()[:200])
+    except Exception as e:
+        log.warning("Could not push: %s", e)
 
 
 def main() -> None:
@@ -55,8 +77,9 @@ def main() -> None:
     log = logging.getLogger("dealfinder.listener")
     load_dotenv(PROJECT_ROOT / ".env")
 
+    pull_latest(logging.getLogger("dealfinder.listener"))
     db = Database(PROJECT_ROOT / "data" / "dealfinder.db")
-    handler = CommandHandler(PROJECT_ROOT / "config")
+    handler = CommandHandler(PROJECT_ROOT / "config", db)
     opts = RunOpts()
 
     notify_discord.send(
@@ -81,9 +104,11 @@ def main() -> None:
                 low = text.lower()
                 if low.startswith("!scan"):
                     try:
+                        pull_latest(log)   # share the cloud's dedup memory
                         # send_now so results come back immediately rather
                         # than waiting for the digest interval
                         run_scan(db, RunOpts(send_now=True), log)
+                        push_state(log, "scan state from local listener")
                     except Exception as e:
                         log.error("Scan failed: %s", e)
                         notify_discord.send(f"❌ Scan failed: `{e}`")
@@ -107,8 +132,9 @@ def main() -> None:
                 reply = handler.handle(text)
                 if reply:
                     notify_discord.send(reply)
-                    if handler.changed:
-                        push_config(log)
+                    # config edits and purchase logs both need to reach the cloud
+                    if handler.changed or low.startswith(("!bought", "!sold")):
+                        push_state(log, "config/purchase update via Discord")
                         handler.changed.clear()
 
             time.sleep(POLL_SECONDS)

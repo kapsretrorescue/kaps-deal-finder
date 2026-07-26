@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -22,7 +23,9 @@ log = logging.getLogger("dealfinder.ebay")
 
 TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
 SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+ITEM_URL = "https://api.ebay.com/buy/browse/v1/item/"
 CATEGORY_VIDEO_GAME_CONSOLES = "139971"
+HTML_TAG = re.compile(r"<[^>]+>")
 
 _token_cache: str | None = None
 
@@ -106,19 +109,60 @@ def _parse_item(item: dict, ending_cutoff: datetime) -> Listing | None:
     )
 
 
-def fetch(consoles: dict, settings: dict) -> list[Listing]:
+def _headers(settings: dict) -> dict | None:
+    """Auth + marketplace + delivery location (needed for shipping quotes)."""
     client_id = os.environ.get("EBAY_CLIENT_ID", "")
     client_secret = os.environ.get("EBAY_CLIENT_SECRET", "")
     if not client_id or not client_secret:
         log.info("eBay skipped: EBAY_CLIENT_ID / EBAY_CLIENT_SECRET not set in .env")
-        return []
-
-    cfg = settings["sources"]["ebay"]
-    token = _get_token(client_id, client_secret)
-    headers = {
-        "Authorization": f"Bearer {token}",
+        return None
+    h = {
+        "Authorization": f"Bearer {_get_token(client_id, client_secret)}",
         "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     }
+    zip_code = str(settings["sources"]["ebay"].get("ship_to_zip", "")).strip()
+    if zip_code:
+        # Without a destination eBay can't calculate shipping, and most
+        # listings come back with no shipping cost at all.
+        h["X-EBAY-C-ENDUSERCTX"] = (
+            f"contextualLocation=country%3DUS%2Czip%3D{zip_code}")
+    return h
+
+
+def fetch_descriptions(item_ids: list[str], settings: dict) -> dict[str, str]:
+    """Full item descriptions for the shortlist that cleared the profit bar.
+
+    Search results only carry a condition label, so anything the seller
+    disclosed in the body ("water damage", "no motherboard") is invisible
+    until we pull the item itself.
+    """
+    headers = _headers(settings)
+    if not headers or not item_ids:
+        return {}
+    cap = settings["sources"]["ebay"].get("detail_fetch_max", 40)
+    out: dict[str, str] = {}
+    for item_id in item_ids[:cap]:
+        try:
+            resp = requests.get(ITEM_URL + item_id, headers=headers, timeout=30)
+            if resp.status_code >= 300:
+                continue
+            data = resp.json()
+        except (requests.RequestException, ValueError):
+            continue
+        text = " ".join(filter(None, [
+            data.get("shortDescription", ""),
+            HTML_TAG.sub(" ", data.get("description", "") or ""),
+        ]))
+        out[item_id] = re.sub(r"\s+", " ", text)[:4000]
+    log.info("eBay: pulled %d full descriptions", len(out))
+    return out
+
+
+def fetch(consoles: dict, settings: dict, auctions_only: bool = False) -> list[Listing]:
+    headers = _headers(settings)
+    if headers is None:
+        return []
+    cfg = settings["sources"]["ebay"]
     limit = str(cfg.get("max_results_per_search", 50))
     ending_cutoff = datetime.now(timezone.utc) + timedelta(
         hours=cfg.get("ending_soon_hours", 2))
@@ -143,7 +187,20 @@ def fetch(consoles: dict, settings: dict) -> list[Listing]:
         if not c.get("enabled", True):
             continue
         terms = c.get("search_terms", [])
-        # Pass 1: newest listings for every search term
+        if not terms:
+            continue
+        # Auctions ending soonest — the only pass that runs in auctions-only
+        # mode, so ending auctions get checked far more often than full scans.
+        run_search({
+            "q": terms[0],
+            "category_ids": CATEGORY_VIDEO_GAME_CONSOLES,
+            "sort": "endingSoonest",
+            "limit": "25",
+            "filter": "priceCurrency:USD,buyingOptions:{AUCTION}",
+        })
+        if auctions_only:
+            continue
+        # Newest listings for every search term
         for term in terms:
             run_search({
                 "q": term,
@@ -152,15 +209,7 @@ def fetch(consoles: dict, settings: dict) -> list[Listing]:
                 "limit": limit,
                 "filter": "priceCurrency:USD",
             })
-        # Pass 2: auctions ending soonest (first term only, to save quota)
-        if terms:
-            run_search({
-                "q": terms[0],
-                "category_ids": CATEGORY_VIDEO_GAME_CONSOLES,
-                "sort": "endingSoonest",
-                "limit": "25",
-                "filter": "priceCurrency:USD,buyingOptions:{AUCTION}",
-            })
 
-    log.info("eBay: %d unique listings fetched", len(listings))
+    log.info("eBay: %d unique listings fetched%s", len(listings),
+             " (auctions only)" if auctions_only else "")
     return listings
