@@ -105,6 +105,7 @@ class CommandHandler:
     def _cmd_help(self) -> str:
         return (
             "**Deal finder commands**\n"
+            "`!scan` — scan eBay right now\n"
             "`!settings` — current settings\n"
             "`!consoles` — consoles, sell prices, on/off\n"
             "`!set <path> <value>` — change a setting\n"
@@ -115,7 +116,8 @@ class CommandHandler:
             "`!set notify.instant_min_tier great`\n"
             "`!set gb_dmg.sell_price 110`\n"
             "`!disable n2ds`\n\n"
-            "_Changes apply on the next hourly scan._"
+            "_Instant while the listener is running; otherwise applied on the "
+            "next hourly scan._"
         )
 
     def _cmd_settings(self) -> str:

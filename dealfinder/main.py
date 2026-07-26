@@ -1,24 +1,25 @@
 """One run of the deal finder: fetch -> score -> dedupe -> alert -> digest.
 
 Tier logic (see analysis.py):
-  🔥 great / ✅ good  -> instant Discord alert (configurable via
-                         notify.instant_min_tier)
+  🔥 great / ✅ good  -> instant Discord alert (notify.instant_min_tier)
   🟡 marginal         -> hourly family digest only
   ❌ skip             -> stored for dedup, never shown
-Auctions already seen get RE-alerted once when they enter their final
-window (default 2h) if their current bid still makes them a deal.
+Auctions only alert inside their final window (their price is just the
+current bid until then), and only once.
 
 Usage:
-  python -m dealfinder.main               # normal scheduled run
+  python -m dealfinder.main               # one scheduled run
   python -m dealfinder.main --mock        # fake listings, no API keys needed
   python -m dealfinder.main --dry-run     # print alerts/digest, send nothing
-  python -m dealfinder.main --send-now    # ignore digest interval
+  python -m dealfinder.main --send-now    # ignore the digest interval
+  python -m dealfinder.listener           # stay running, answer commands live
 """
 from __future__ import annotations
 
 import argparse
 import logging
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +35,14 @@ from .sources import ebay, mock, reddit
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 SOURCE_MODULES = {"ebay": ebay, "reddit": reddit, "mock": mock}
+
+
+@dataclass
+class RunOpts:
+    """What a single scan should do."""
+    mock: bool = False
+    dry_run: bool = False
+    send_now: bool = False       # ignore the digest interval
 
 
 def setup_logging() -> None:
@@ -54,47 +63,50 @@ def load_yaml(name: str) -> dict:
         return yaml.safe_load(f)
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser(description="Kap's Retro Rescue deal finder")
-    parser.add_argument("--mock", action="store_true")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--send-now", action="store_true")
-    args = parser.parse_args()
-
-    setup_logging()
-    log = logging.getLogger("dealfinder")
-    load_dotenv(PROJECT_ROOT / ".env")
-
-    db_early = Database(PROJECT_ROOT / "data" / "dealfinder.db")
-
-    # ---- 0. Discord commands (!settings etc.) -----------------------------
-    # Read BEFORE loading config, so a command typed since the last run takes
-    # effect on this run. Needs DISCORD_BOT_TOKEN; silently skipped without it.
-    if not args.mock:
-        try:
-            contents, newest = notify_discord.read_commands(
-                db_early.get_meta("last_command_id"))
-            handler = CommandHandler(PROJECT_ROOT / "config")
-            replies = [r for c in contents if (r := handler.handle(c))]
-            if newest:
-                db_early.set_meta("last_command_id", newest)
-            if replies:
-                log.info("Handled %d Discord command(s)", len(replies))
-                if args.dry_run:
-                    print("\n".join(replies))
-                else:
-                    notify_discord.send("\n\n".join(replies))
-        except Exception as e:
-            log.error("Command handling failed: %s", e)
-
+def load_config() -> tuple[dict, dict, dict]:
+    """(settings, consoles, families) — re-read every run so config edits
+    made by Discord commands take effect immediately."""
     settings = load_yaml("settings.yaml")
-    consoles_doc = load_yaml("consoles.yaml")
-    consoles = consoles_doc["consoles"]
-    families = consoles_doc["families"]
-    db = db_early
+    doc = load_yaml("consoles.yaml")
+    return settings, doc["consoles"], doc["families"]
+
+
+def process_commands(db: Database, opts: RunOpts, log) -> bool:
+    """Read and apply any Discord !commands. Returns True if a scan was
+    explicitly requested with !scan."""
+    if opts.mock:
+        return False
+    scan_requested = False
+    try:
+        contents, newest = notify_discord.read_commands(db.get_meta("last_command_id"))
+        handler = CommandHandler(PROJECT_ROOT / "config")
+        replies = []
+        for content in contents:
+            if content.strip().lower().startswith("!scan"):
+                scan_requested = True
+                continue
+            reply = handler.handle(content)
+            if reply:
+                replies.append(reply)
+        if newest:
+            db.set_meta("last_command_id", newest)
+        if replies:
+            log.info("Handled %d Discord command(s)", len(replies))
+            if opts.dry_run:
+                print("\n".join(replies))
+            else:
+                notify_discord.send("\n\n".join(replies))
+    except Exception as e:
+        log.error("Command handling failed: %s", e)
+    return scan_requested
+
+
+def run_scan(db: Database, opts: RunOpts, log) -> None:
+    """Fetch, score, store, alert, and (if due) send the digest."""
+    settings, consoles, families = load_config()
 
     # ---- 1. Fetch ---------------------------------------------------------
-    enabled = ["mock"] if args.mock else [
+    enabled = ["mock"] if opts.mock else [
         k for k, v in settings["sources"].items()
         if v.get("enabled") and k in SOURCE_MODULES]
     listings = []
@@ -104,9 +116,9 @@ def main() -> None:
         except Exception as e:
             log.error("Source %s crashed: %s", name, e)
 
-    # ---- 2. Score every listing ------------------------------------------
+    # ---- 2. Score ---------------------------------------------------------
     new_matches = 0
-    ending_realerts = []   # (source, listing_id) of auctions to re-alert
+    ending_realerts = []
     for listing in listings:
         result = analysis.analyze(listing, consoles, settings)
         if result.excluded_reason or not result.consoles:
@@ -115,8 +127,6 @@ def main() -> None:
             db.add(result)
             new_matches += 1
         elif listing.ending_soon and result.tier in ("great", "good"):
-            # Seen before, but it's an auction in its final window and the
-            # CURRENT bid still clears the profit bar -> refresh + re-alert
             row = db.conn.execute(
                 "SELECT ending_notified FROM listings WHERE source=? AND listing_id=?",
                 (listing.source, listing.listing_id)).fetchone()
@@ -127,10 +137,9 @@ def main() -> None:
              len(listings), new_matches, len(ending_realerts))
 
     # ---- 3. Instant alerts ------------------------------------------------
-    # Auctions with time left don't instant-alert: their "price" is just the
-    # current bid and will climb. They live in the digest as watch items and
-    # get ONE instant alert if still a deal inside the final window.
     def _alertable_now(row) -> bool:
+        """Auctions with time left don't alert — their price is only the
+        current bid. They wait for the final window."""
         if row["listing_type"] != "AUCTION" or not row["end_time"]:
             return True
         try:
@@ -147,11 +156,9 @@ def main() -> None:
     for key in ending_realerts:
         if key not in seen_keys:
             r = db.conn.execute(
-                "SELECT * FROM listings WHERE source=? AND listing_id=?", key
-            ).fetchone()
+                "SELECT * FROM listings WHERE source=? AND listing_id=?", key).fetchone()
             if r:
                 ending_rows.append(r)
-    # ending_notified=1 so each auction only gets one final-window ping
     if ending_rows:
         db.mark(ending_rows, "ending_notified")
 
@@ -161,8 +168,8 @@ def main() -> None:
     if all_instant:
         alert = digest.build_instant(all_instant, consoles, settings["pricing"])
         if overflow > 0:
-            alert += f"\n\n…plus {overflow} more — see the hourly digest."
-        if args.dry_run:
+            alert += f"\n\n…plus {overflow} more — see the digest."
+        if opts.dry_run:
             print("\n" + "=" * 60 + "\nDRY RUN — instant alert:\n" + "=" * 60)
             print(alert)
         elif settings["notify"].get("discord"):
@@ -172,8 +179,8 @@ def main() -> None:
             else:
                 log.warning("Instant alert failed; will retry next run.")
 
-    # ---- 4. Hourly digest -------------------------------------------------
-    if not (args.send_now or args.dry_run):
+    # ---- 4. Digest --------------------------------------------------------
+    if not (opts.send_now or opts.dry_run):
         last = db.last_digest()
         if last is not None:
             hours = (datetime.now(timezone.utc) - last).total_seconds() / 3600
@@ -192,8 +199,8 @@ def main() -> None:
         log.info("Digest empty after family grouping.")
         return
 
-    if args.dry_run:
-        print("\n" + "=" * 60 + "\nDRY RUN — hourly digest:\n" + "=" * 60)
+    if opts.dry_run:
+        print("\n" + "=" * 60 + "\nDRY RUN — digest:\n" + "=" * 60)
         print(text)
         return
 
@@ -205,6 +212,25 @@ def main() -> None:
     if sent:
         db.set_last_digest()
         log.info("Digest sent.")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Kap's Retro Rescue deal finder")
+    parser.add_argument("--mock", action="store_true")
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--send-now", action="store_true")
+    args = parser.parse_args()
+
+    setup_logging()
+    log = logging.getLogger("dealfinder")
+    load_dotenv(PROJECT_ROOT / ".env")
+
+    opts = RunOpts(mock=args.mock, dry_run=args.dry_run, send_now=args.send_now)
+    db = Database(PROJECT_ROOT / "data" / "dealfinder.db")
+
+    # Commands first, so a config change applies to this very scan
+    process_commands(db, opts, log)
+    run_scan(db, opts, log)
 
 
 if __name__ == "__main__":
