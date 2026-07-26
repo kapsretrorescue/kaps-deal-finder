@@ -36,18 +36,38 @@ def _chunk(text: str, limit: int = DISCORD_CHAR_LIMIT - 100) -> list[str]:
     return chunks
 
 
-def send(digest_text: str) -> bool:
+EMBEDS_PER_MESSAGE = 10       # Discord's hard limit
+
+
+def send(digest_text: str = "", embeds: list | None = None) -> bool:
+    """Post to the channel. With `embeds` you get compact colour-coded cards
+    (10 per message max); plain text is chunked to Discord's 2000-char limit."""
     url = os.environ.get("DISCORD_WEBHOOK_URL", "")
     if not url:
         log.warning("Discord notify enabled but DISCORD_WEBHOOK_URL not set in .env")
         return False
-    ok = True
-    for chunk in _chunk(digest_text):
-        resp = requests.post(url, json={"content": chunk}, timeout=30)
+
+    def post(payload: dict) -> bool:
+        resp = requests.post(url, json=payload, timeout=30)
         if resp.status_code >= 300:
-            log.error("Discord webhook failed: %s %s", resp.status_code, resp.text[:200])
-            ok = False
-    return ok
+            log.error("Discord webhook failed: %s %s",
+                      resp.status_code, resp.text[:300])
+            return False
+        return True
+
+    if embeds:
+        ok = True
+        for i in range(0, len(embeds), EMBEDS_PER_MESSAGE):
+            batch = embeds[i:i + EMBEDS_PER_MESSAGE]
+            payload = {"embeds": batch}
+            if i == 0 and digest_text:
+                payload["content"] = digest_text[:1900]
+            ok = post(payload) and ok
+        return ok
+
+    if not digest_text.strip():
+        return True
+    return all(post({"content": chunk}) for chunk in _chunk(digest_text))
 
 
 def _channel_id() -> str | None:

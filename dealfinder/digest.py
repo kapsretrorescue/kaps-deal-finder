@@ -16,6 +16,78 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+# Discord embed cards: colour-coded, ~4 lines each on a phone instead of 8.
+TIER_COLORS = {
+    "great": 0xFF4757,     # hot red
+    "good": 0x2ED573,      # green
+    "marginal": 0xFFA502,  # amber
+    "no_price": 0x747D8C,  # grey
+    "skip": 0x747D8C,
+}
+TIER_EMOJI = {"great": "🔥", "good": "✅", "marginal": "🟡",
+              "no_price": "👀", "skip": "❓"}
+
+
+def row_to_embed(row, consoles_cfg: dict, pricing: dict) -> dict:
+    """One listing as a compact Discord embed card.
+
+    Only the numbers you act on: what it costs, what you'd clear, and what's
+    wrong with it. Static reference (max-buy tiers) lives in `!consoles`.
+    """
+    qty = row["quantity"] or 1
+    name = _console_names(row, consoles_cfg)
+    emoji = TIER_EMOJI.get(row["tier"], "")
+
+    if row["price"] is None:
+        headline = f"{emoji} {name} · price?"
+    elif qty > 1:
+        headline = f"{emoji} {qty}x {name} · ${row['eff_per_unit']:.0f}/unit"
+    else:
+        headline = f"{emoji} {name} · ${row['price']:.0f}"
+
+    fields = []
+    if row["price"] is not None:
+        ship = (f"+${row['shipping']:.0f} ship" if row["shipping"]
+                else ("free ship" if row["shipping"] == 0 else "+? ship"))
+        fields.append({"name": "Cost", "value": f"${row['price']:.0f} {ship}",
+                       "inline": True})
+        if row["est_profit"] is not None:
+            fields.append({"name": "Profit", "value": f"~${row['est_profit']:.0f}/unit",
+                           "inline": True})
+        if qty > 1 and row["est_profit_total"] is not None:
+            fields.append({"name": "Lot total",
+                           "value": f"~${row['est_profit_total']:.0f} · "
+                                    f"{row['good_units']} good",
+                           "inline": True})
+
+    # Footer: the caveats, compressed
+    bits = [CONDITION_LABELS.get(row["condition"], "")]
+    if row["cheap_fixes"]:
+        fixes = row["cheap_fixes"].split(",")[:2]
+        bits.append("cheap fix: " + ", ".join(fixes))
+    if row["screen_issue"]:
+        bits.append("screen −$45")
+    if row["mixed_lot"]:
+        bits.append("⚠ mixed lot")
+    if row["qty_uncertain"]:
+        bits.append("⚠ verify qty")
+    if row["signals"]:
+        bits.append(row["signals"].split(",")[0])
+    if row["listing_type"] == "AUCTION" and row["end_time"]:
+        bits.append(f"⏰ ends {_time_left(row['end_time'])}")
+    if row["seller_feedback"]:
+        bits.append(row["seller_feedback"])
+
+    return {
+        "title": headline[:250],
+        "url": row["url"],
+        "description": f"_{row['title'][:110]}_",
+        "color": TIER_COLORS.get(row["tier"], 0x747D8C),
+        "fields": fields,
+        "footer": {"text": " · ".join(b for b in bits if b)[:2040]},
+    }
+
+
 TIER_LABELS = {
     "great": "🔥 GREAT DEAL",
     "good": "✅ GOOD DEAL",
@@ -115,6 +187,41 @@ def format_row(row, consoles_cfg: dict, pricing: dict) -> str:
 def build_instant(rows, consoles_cfg: dict, pricing: dict) -> str:
     header = f"## 🚨 {len(rows)} deal(s) worth acting on\n"
     return "\n\n".join([header] + [format_row(r, consoles_cfg, pricing) for r in rows])
+
+
+def embeds_instant(rows, consoles_cfg: dict, pricing: dict) -> tuple[str, list]:
+    n = len(rows)
+    head = f"🚨 **{n} deal{'s' if n != 1 else ''} worth acting on**"
+    return head, [row_to_embed(r, consoles_cfg, pricing) for r in rows]
+
+
+def embeds_digest(rows, consoles_cfg: dict, settings: dict) -> tuple[str, list]:
+    """Scheduled pulse: just the top N cards, newest window."""
+    d = settings["digest"]
+    consoles = {k: v for k, v in consoles_cfg.items() if k != "_families"}
+    ranked = [r for r in rows if r["tier"] != "no_price"][:d.get("top_n", 10)]
+    if not ranked:
+        return "", []
+
+    extras = [r for r in rows if r["qty_uncertain"]
+              and r not in ranked][:3]
+    head = f"🏆 **Top {len(ranked)}** · last {d['lookback_hours']}h"
+    if extras:
+        # One line, not three cards — these only need a glance
+        links = " ".join(f"[#{i+1}]({r['url']})" for i, r in enumerate(extras))
+        head += f"\n❓ possible lots, qty unclear: {links}"
+    return head, [row_to_embed(r, consoles, settings["pricing"]) for r in ranked]
+
+
+def embeds_search(rows, console_name: str, consoles_cfg: dict,
+                  pricing: dict) -> tuple[str, list]:
+    if not rows:
+        return (f"🔍 **{console_name}** — nothing matched right now.", [])
+    deals = sum(1 for r in rows if r["tier"] in ("great", "good", "marginal"))
+    head = (f"🔍 **{console_name}** · {deals} deal{'s' if deals != 1 else ''} "
+            f"in the {len(rows)} best listings" if deals else
+            f"🔍 **{console_name}** · no deals right now — closest listings")
+    return head, [row_to_embed(r, consoles_cfg, pricing) for r in rows]
 
 
 def build_search(rows, console_name: str, consoles_cfg: dict, pricing: dict) -> str:

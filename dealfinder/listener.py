@@ -80,12 +80,10 @@ def main() -> None:
 
                 low = text.lower()
                 if low.startswith("!scan"):
-                    notify_discord.send("🔍 Scanning every console — one moment…")
                     try:
                         # send_now so results come back immediately rather
                         # than waiting for the digest interval
                         run_scan(db, RunOpts(send_now=True), log)
-                        notify_discord.send("✅ Scan complete.")
                     except Exception as e:
                         log.error("Scan failed: %s", e)
                         notify_discord.send(f"❌ Scan failed: `{e}`")
@@ -98,9 +96,9 @@ def main() -> None:
                             "❌ Usage: `!search <console>` — e.g. `!search dslite`. "
                             "`!consoles` lists the names.")
                         continue
-                    notify_discord.send(f"🔍 Searching **{parts[1]}** — one moment…")
                     try:
-                        notify_discord.send(run_search(db, parts[1], RunOpts(), log))
+                        head, cards = run_search(db, parts[1], RunOpts(), log)
+                        notify_discord.send(head, cards)
                     except Exception as e:
                         log.error("Search failed: %s", e)
                         notify_discord.send(f"❌ Search failed: `{e}`")

@@ -110,7 +110,7 @@ def process_commands(db: Database, opts: RunOpts, log) -> list[str]:
     return searches
 
 
-def run_search(db: Database, name: str, opts: RunOpts, log) -> str:
+def run_search(db: Database, name: str, opts: RunOpts, log) -> tuple[str, list]:
     """On-demand `!search <console>`: hit eBay for ONE console and return the
     best current listings ranked by estimated profit.
 
@@ -123,7 +123,7 @@ def run_search(db: Database, name: str, opts: RunOpts, log) -> str:
     if not key:
         options = ", ".join(f"`{a}`" for c in consoles.values()
                             for a in (c.get("aliases") or [])[:1])
-        return f"❌ Don't know console `{name}`. Try one of: {options}\nOr `!consoles`."
+        return (f"❌ Don't know console `{name}`. Try: {options}", [])
 
     cfg = consoles[key]
     log.info("Searching eBay for %s", cfg["name"])
@@ -143,7 +143,7 @@ def run_search(db: Database, name: str, opts: RunOpts, log) -> str:
         matched_ids.append(listing.listing_id)
 
     if not matched_ids:
-        return digest.build_search([], cfg["name"], consoles, settings["pricing"])
+        return digest.embeds_search([], cfg["name"], consoles, settings["pricing"])
 
     limit = settings["digest"].get("search_results", 10)
     marks = ",".join("?" * len(matched_ids))
@@ -156,7 +156,7 @@ def run_search(db: Database, name: str, opts: RunOpts, log) -> str:
             LIMIT ?""",
         (*matched_ids, limit),
     ).fetchall()
-    return digest.build_search(rows, cfg["name"], consoles, settings["pricing"])
+    return digest.embeds_search(rows, cfg["name"], consoles, settings["pricing"])
 
 
 def run_scan(db: Database, opts: RunOpts, log) -> None:
@@ -224,14 +224,14 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
     all_instant = (instant_rows + ending_rows)[:cap]
     overflow = len(instant_rows) + len(ending_rows) - len(all_instant)
     if all_instant:
-        alert = digest.build_instant(all_instant, consoles, settings["pricing"])
+        head, cards = digest.embeds_instant(all_instant, consoles, settings["pricing"])
         if overflow > 0:
-            alert += f"\n\n…plus {overflow} more — see the digest."
+            head += f" · +{overflow} more in the digest"
         if opts.dry_run:
             print("\n" + "=" * 60 + "\nDRY RUN — instant alert:\n" + "=" * 60)
-            print(alert)
+            print(digest.build_instant(all_instant, consoles, settings["pricing"]))
         elif settings["notify"].get("discord"):
-            if notify_discord.send(alert):
+            if notify_discord.send(head, cards):
                 db.mark(instant_rows, "notified")
                 log.info("Instant alert sent: %d listing(s).", len(all_instant))
             else:
@@ -252,21 +252,23 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
         return
     consoles_with_fams = dict(consoles)
     consoles_with_fams["_families"] = families
-    text = digest.build_digest(rows, consoles_with_fams, settings)
-    if not text.strip():
-        log.info("Digest empty after family grouping.")
+    head, cards = digest.embeds_digest(rows, consoles_with_fams, settings)
+    if not cards:
+        log.info("Digest empty — nothing ranked.")
         return
 
     if opts.dry_run:
         print("\n" + "=" * 60 + "\nDRY RUN — digest:\n" + "=" * 60)
-        print(text)
+        print(digest.build_digest(rows, consoles_with_fams, settings))
         return
 
     sent = False
     if settings["notify"].get("discord"):
-        sent = notify_discord.send(text) or sent
+        sent = notify_discord.send(head, cards) or sent
     if settings["notify"].get("email"):
-        sent = email_notify.send(text) or sent
+        # email stays plain text
+        sent = email_notify.send(
+            digest.build_digest(rows, consoles_with_fams, settings)) or sent
     if sent:
         db.set_last_digest()
         log.info("Digest sent.")
@@ -289,11 +291,11 @@ def main() -> None:
     # Commands first, so a config change applies to this very scan
     searches = process_commands(db, opts, log)
     for name in searches:
-        result = run_search(db, name, opts, log)
+        head, cards = run_search(db, name, opts, log)
         if opts.dry_run:
-            print(result)
+            print(head, f"({len(cards)} cards)")
         else:
-            notify_discord.send(result)
+            notify_discord.send(head, cards)
     run_scan(db, opts, log)
 
 
