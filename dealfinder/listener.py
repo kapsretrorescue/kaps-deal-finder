@@ -44,11 +44,18 @@ def pull_latest(log) -> None:
     On conflict the cloud wins — it runs far more often.
     """
     try:
-        if _git("pull", "--rebase", "-q").returncode != 0:
-            _git("rebase", "--abort")
-            _git("checkout", "--theirs", "data/dealfinder.db")
-            _git("reset", "--hard", "origin/main")
+        if _git("pull", "--rebase", "-q").returncode == 0:
+            return
+        # Conflict — almost always the binary database, which can't be
+        # merged. Abort cleanly and take ONLY the cloud's database file.
+        # Never reset the working tree: that would throw away uncommitted
+        # local work (it once wiped a batch of new scripts).
+        _git("rebase", "--abort")
+        _git("fetch", "origin", "-q")
+        if _git("checkout", "origin/main", "--", "data/dealfinder.db").returncode == 0:
             log.info("Database conflicted; took the cloud's copy.")
+        else:
+            log.warning("Sync conflict left unresolved — running on local state.")
     except Exception as e:
         log.warning("Could not sync from GitHub: %s", e)
 
