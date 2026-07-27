@@ -1,0 +1,62 @@
+# Runs a single Discord slash command.
+#
+# Triggered by the Cloudflare Worker via repository_dispatch: Discord gets an
+# instant acknowledgement from the Worker, and the actual work happens here,
+# posting its reply to the channel when done (~40-60s later).
+
+name: discord-command
+
+on:
+  repository_dispatch:
+    types: [command]
+
+# Never let two commands fight over the database.
+concurrency:
+  group: deal-finder
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run-command:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - name: Run the command
+        env:
+          EBAY_CLIENT_ID: ${{ secrets.EBAY_CLIENT_ID }}
+          EBAY_CLIENT_SECRET: ${{ secrets.EBAY_CLIENT_SECRET }}
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: "github-actions:kaps-deal-finder:v1.0"
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          COMMAND: ${{ github.event.client_payload.command }}
+        run: python -m dealfinder.main --command "$COMMAND"
+
+      - name: Tell Discord if the command itself failed
+        if: failure()
+        env:
+          HOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST -H "Content-Type: application/json" \
+            -d "{\"content\":\"⚠️ Command failed to run. Logs: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}>\"}" \
+            "$HOOK" || true
+
+      - name: Commit any config or database changes
+        run: |
+          git config user.name "deal-finder-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/dealfinder.db config/*.yaml
+          git diff --cached --quiet || git commit -m "state change from a Discord command"
+          git push

@@ -391,6 +391,33 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
         log.info("Digest sent.")
 
 
+def run_one_command(db: Database, text: str, opts: RunOpts, log) -> None:
+    """Execute a single command and post the result to Discord.
+
+    Used by the slash-command path: Cloudflare answers Discord instantly,
+    then GitHub Actions runs the command here and posts the real reply.
+    """
+    text = text.strip()
+    low = text.lower()
+    log.info("Slash command: %s", text[:120])
+
+    if low.startswith("!scan"):
+        run_scan(db, RunOpts(send_now=True), log)
+        return
+
+    if low.startswith("!search"):
+        parts = text.split(maxsplit=1)
+        if len(parts) < 2:
+            notify_discord.send("❌ Usage: `/search console:<name>`")
+            return
+        head, cards = run_search(db, parts[1], opts, log)
+        notify_discord.send(head, cards)
+        return
+
+    reply = CommandHandler(PROJECT_ROOT / "config", db).handle(text)
+    notify_discord.send(reply or f"❓ Didn't understand `{text[:80]}`")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Kap's Retro Rescue deal finder")
     parser.add_argument("--mock", action="store_true")
@@ -398,6 +425,9 @@ def main() -> None:
     parser.add_argument("--send-now", action="store_true")
     parser.add_argument("--auctions-only", action="store_true",
                         help="cheap pass: only auctions nearing their end")
+    parser.add_argument("--command", metavar="TEXT",
+                        help="run one command (e.g. '!scan') and exit — used "
+                             "by the slash-command workflow")
     args = parser.parse_args()
 
     setup_logging()
@@ -409,6 +439,10 @@ def main() -> None:
     db = Database(PROJECT_ROOT / "data" / "dealfinder.db")
 
     try:
+        if args.command:
+            run_one_command(db, args.command, opts, log)
+            return
+
         if opts.auctions_only:      # quick sweep: no commands, no digest
             run_scan(db, opts, log)
             return
