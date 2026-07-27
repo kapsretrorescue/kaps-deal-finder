@@ -28,7 +28,8 @@ TIER_EMOJI = {"great": "🔥", "good": "✅", "marginal": "🟡",
               "no_price": "👀", "skip": "❓"}
 
 
-def row_to_embed(row, consoles_cfg: dict, pricing: dict) -> dict:
+def row_to_embed(row, consoles_cfg: dict, pricing: dict,
+                 was_price: float | None = None) -> dict:
     """One listing as a compact Discord embed card.
 
     Only the numbers you act on: what it costs, what you'd clear, and what's
@@ -38,17 +39,29 @@ def row_to_embed(row, consoles_cfg: dict, pricing: dict) -> dict:
     name = _console_names(row, consoles_cfg)
     emoji = TIER_EMOJI.get(row["tier"], "")
 
+    # Price cut and local pickup both change how urgent a card is, so they
+    # lead the title rather than hiding in the footer.
+    prefix = "📉 " if was_price else ("🚗 " if row["local_pickup"] else "")
     if row["price"] is None:
-        headline = f"{emoji} {name} · price?"
+        headline = f"{prefix}{emoji} {name} · price?"
     elif qty > 1:
-        headline = f"{emoji} {qty}x {name} · ${row['eff_per_unit']:.0f}/unit"
+        headline = f"{prefix}{emoji} {qty}x {name} · ${row['eff_per_unit']:.0f}/unit"
     else:
-        headline = f"{emoji} {name} · ${row['price']:.0f}"
+        headline = f"{prefix}{emoji} {name} · ${row['price']:.0f}"
 
     fields = []
+    if was_price:
+        fields.append({"name": "Was", "value": f"~~${was_price:.0f}~~",
+                       "inline": True})
     if row["price"] is not None:
-        ship = (f"+${row['shipping']:.0f} ship" if row["shipping"]
-                else ("free ship" if row["shipping"] == 0 else "+? ship"))
+        if row["local_pickup"]:
+            ship = "pickup"
+        elif row["shipping"]:
+            ship = f"+${row['shipping']:.0f} ship"
+        elif row["shipping"] == 0:
+            ship = "free ship"
+        else:
+            ship = "+? ship"
         fields.append({"name": "Cost", "value": f"${row['price']:.0f} {ship}",
                        "inline": True})
         if row["est_profit"] is not None:
@@ -189,10 +202,16 @@ def build_instant(rows, consoles_cfg: dict, pricing: dict) -> str:
     return "\n\n".join([header] + [format_row(r, consoles_cfg, pricing) for r in rows])
 
 
-def embeds_instant(rows, consoles_cfg: dict, pricing: dict) -> tuple[str, list]:
+def embeds_instant(rows, consoles_cfg: dict, pricing: dict,
+                   drop_prices: dict | None = None) -> tuple[str, list]:
+    drop_prices = drop_prices or {}
     n = len(rows)
+    drops = sum(1 for r in rows if r["listing_id"] in drop_prices)
     head = f"🚨 **{n} deal{'s' if n != 1 else ''} worth acting on**"
-    return head, [row_to_embed(r, consoles_cfg, pricing) for r in rows]
+    if drops:
+        head += f" · {drops} price cut{'s' if drops != 1 else ''} 📉"
+    return head, [row_to_embed(r, consoles_cfg, pricing,
+                               drop_prices.get(r["listing_id"])) for r in rows]
 
 
 def embeds_digest(rows, consoles_cfg: dict, settings: dict) -> tuple[str, list]:

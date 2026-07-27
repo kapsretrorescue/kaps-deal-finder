@@ -18,6 +18,11 @@ pricing:
   screen_repair_penalty: 45  # subtracted from est. profit when screen issues
                              # detected (DS screens cost $36-53)
   parts_credit_per_dud: 10   # $ of harvestable parts per expected dud in a lot
+  # A listing you've already been shown can become a deal when the seller
+  # cuts the price. Re-alert only when the drop clears BOTH thresholds, so
+  # penny fluctuations on cheap lots don't spam you.
+  price_drop_min_pct: 10
+  price_drop_min_usd: 10
 
 # --- Lot yield --------------------------------------------------------------
 # Not every unit in a lot is salvageable. effective cost per good unit =
@@ -139,6 +144,15 @@ keywords:
     - "can't test"
     - "no way to test"
 
+# --- Seller risk ------------------------------------------------------------
+# On expensive lots, a brand-new or low-rated seller is worth knowing about.
+# This only ADDS A WARNING to the card — it never changes the deal tier,
+# because a cheap lot from a new seller is often exactly the one to grab.
+risk:
+  high_value_usd: 150        # only scrutinise sellers above this order size
+  min_feedback_score: 25     # fewer ratings than this = flagged
+  min_feedback_pct: 97       # lower approval than this = flagged
+
 # --- Accessory noise filter (never consoles) --------------------------------
 matching:
   exclude_always:
@@ -181,6 +195,10 @@ notify:
                              # "good" = 🔥 and ✅ alert instantly
   instant_max_per_run: 8     # cap one run's instant ping to the N best;
                              # the rest still appear in the hourly digest
+  alert_on_failure: true     # ping Discord when a scan errors or eBay auth
+                             # breaks — otherwise a dead bot looks exactly
+                             # like a quiet market
+  stale_hours: 8             # warn if no scan has succeeded in this long
 digest:
   interval_hours: 3          # scheduled market pulse, every N hours
   top_n: 10                  # how many of the best deals the digest lists
@@ -195,8 +213,14 @@ sources:
     ending_soon_hours: 4     # auctions alert once inside this window
     # Your ZIP — eBay needs a destination to quote shipping. Without it most
     # listings come back "+? ship" and lots look cheaper than they are.
-    # Change with:  !set sources.ebay.ship_to_zip 64111
-    ship_to_zip: "64111"
+    # Change with:  !set sources.ebay.ship_to_zip 92335
+    ship_to_zip: "92335"        # Fontana, CA
+    # Local pickup = no postage and far less bidding competition. eBay's
+    # pickup search filters don't actually work (tested — they return
+    # out-of-state sellers unchanged), so pickup is confirmed per item from
+    # the location eBay reports, for listings that already look like deals.
+    local_pickup:
+      state: "California"
     # Listings that clear the profit bar get their FULL description pulled and
     # re-scored, because red flags ("water damage") are usually in the body
     # text, not the title. Capped to protect the 5,000 calls/day quota.

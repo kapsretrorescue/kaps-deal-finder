@@ -70,6 +70,67 @@ def send(digest_text: str = "", embeds: list | None = None) -> bool:
     return all(post({"content": chunk}) for chunk in _chunk(digest_text))
 
 
+def post_to_channel(channel_name: str, content: str = "",
+                    embeds: list | None = None) -> bool:
+    """Post to a channel by name (needs the bot token, not the webhook).
+
+    The webhook can only ever post to its own channel, so anything aimed at
+    #for-sale or another channel goes through here.
+    """
+    token = os.environ.get("DISCORD_BOT_TOKEN", "")
+    if not token:
+        log.warning("post_to_channel needs DISCORD_BOT_TOKEN")
+        return False
+    h = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
+    try:
+        guilds = requests.get(f"{API}/users/@me/guilds", headers=h, timeout=30).json()
+        if not guilds:
+            return False
+        chans = requests.get(f"{API}/guilds/{guilds[0]['id']}/channels",
+                             headers=h, timeout=30).json()
+        target = next((c for c in chans if c["name"] == channel_name), None)
+        if not target:
+            log.warning("No channel named %s", channel_name)
+            return False
+        payload: dict = {}
+        if content:
+            payload["content"] = content[:1900]
+        if embeds:
+            payload["embeds"] = embeds[:10]
+        r = requests.post(f"{API}/channels/{target['id']}/messages",
+                          headers=h, json=payload, timeout=30)
+        if r.status_code >= 300:
+            log.error("post to #%s failed: %s %s", channel_name,
+                      r.status_code, r.text[:200])
+            return False
+        return True
+    except (requests.RequestException, ValueError, KeyError) as e:
+        log.error("post_to_channel failed: %s", e)
+        return False
+
+
+def grant_role(user_id: str, role_name: str, remove: bool = False) -> tuple[bool, str]:
+    """Add or remove a server role by name. Returns (ok, message)."""
+    token = os.environ.get("DISCORD_BOT_TOKEN", "")
+    if not token:
+        return False, "DISCORD_BOT_TOKEN not set"
+    h = {"Authorization": f"Bot {token}", "Content-Type": "application/json"}
+    try:
+        gid = requests.get(f"{API}/users/@me/guilds", headers=h, timeout=30).json()[0]["id"]
+        roles = requests.get(f"{API}/guilds/{gid}/roles", headers=h, timeout=30).json()
+        role = next((r for r in roles if r["name"].lower() == role_name.lower()), None)
+        if not role:
+            return False, f"no role called {role_name}"
+        url = f"{API}/guilds/{gid}/members/{user_id}/roles/{role['id']}"
+        r = requests.delete(url, headers=h, timeout=30) if remove else \
+            requests.put(url, headers=h, timeout=30)
+        if r.status_code >= 300:
+            return False, f"Discord said {r.status_code}: {r.text[:120]}"
+        return True, "done"
+    except (requests.RequestException, ValueError, KeyError, IndexError) as e:
+        return False, str(e)
+
+
 def _channel_id() -> str | None:
     """The webhook itself tells us which channel it posts to."""
     url = os.environ.get("DISCORD_WEBHOOK_URL", "")

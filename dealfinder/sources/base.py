@@ -25,3 +25,7 @@ class Listing:
     end_time: str = ""           # ISO timestamp for auctions, else ""
     ending_soon: bool = False    # auction ends within the configured window
     seller_feedback: str = ""    # e.g. "99.1% (2345)"
+    seller_score: int | None = None   # number of ratings
+    seller_pct: float | None = None   # positive feedback %
+    best_offer: bool = False     # seller accepts offers — asking price is soft
+    local_pickup: bool = False   # collect in person: no shipping cost

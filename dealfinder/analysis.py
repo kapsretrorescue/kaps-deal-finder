@@ -212,6 +212,10 @@ def analyze(listing: Listing, consoles_cfg: dict, settings: dict) -> Analysis:
         result.signals.append("very short title")
     elif title.isupper():
         result.signals.append("all-caps title")
+    if listing.local_pickup:
+        result.signals.append("🚗 local pickup")
+    if listing.best_offer:
+        result.signals.append("💬 accepts offers")
 
     # 5. The money math
     if listing.price is None:
@@ -241,6 +245,17 @@ def analyze(listing: Listing, consoles_cfg: dict, settings: dict) -> Analysis:
         profit -= pricing["screen_repair_penalty"]
     result.est_profit_unit = round(profit, 2)
     result.est_profit_total = round(profit * result.good_units, 2)
+
+    # Seller scrutiny on expensive orders only. This WARNS but never changes
+    # the tier — a cheap lot from a new seller is often the one worth taking.
+    rk = settings.get("risk") or {}
+    if rk and result.total_cost >= rk.get("high_value_usd", 150):
+        thin = (listing.seller_score is not None
+                and listing.seller_score < rk.get("min_feedback_score", 25))
+        poor = (listing.seller_pct is not None
+                and listing.seller_pct < rk.get("min_feedback_pct", 97))
+        if thin or poor:
+            result.signals.append("⚠ unproven seller on a big order")
 
     tiers = pricing["profit_tiers"]
     if profit >= tiers["great"]:

@@ -141,7 +141,9 @@ class CommandHandler:
             "`!enable <console>` / `!disable <console>`\n"
             "`!bought <url> <price>` — log a purchase\n"
             "`!sold <#> <total>` — close it out\n"
-            "`!stats` — are the bot's estimates actually right?\n\n"
+            "`!stats` — are the bot's estimates actually right?\n"
+            "`!list <console> <price> | <notes>` — post to #for-sale\n"
+            "`!customer @user` — grant the Customer role\n\n"
             "Examples:\n"
             "`!set pricing.refurb_cost 42`\n"
             "`!set yield.default 0.8`\n"
@@ -339,6 +341,60 @@ class CommandHandler:
                          + ", ".join(f"#{r['id']} ${r['paid']:.0f}" for r in open_[:8]))
         return "\n".join(lines)
 
+    # --- shop -------------------------------------------------------------
+    def _cmd_list(self, rest: str) -> str:
+        """!list <console> <price> | <notes>  ->  posts a card to #for-sale"""
+        from .notify import discord as nd
+        if "|" in rest:
+            head, notes = rest.split("|", 1)
+        else:
+            head, notes = rest, ""
+        parts = head.split()
+        if len(parts) < 2:
+            return ("❌ Usage: `!list <console> <price> | <notes>`\n"
+                    "e.g. `!list gba-sp 145 | AGS-101 backlit, new shell, tested`")
+        price_raw = parts[-1].lstrip("$")
+        name = " ".join(parts[:-1])
+        try:
+            price = float(price_raw)
+        except ValueError:
+            return f"❌ `{price_raw}` isn't a price. Put the price before the `|`."
+
+        consoles = _load(self.paths["consoles"])["consoles"]
+        key = resolve_console(name, consoles)
+        if not key:
+            return f"❌ Don't know console `{name}` — try `!consoles`."
+        cfg = consoles[key]
+
+        embed = {
+            "title": f"🕹️ {cfg['name']} — ${price:.0f}",
+            "description": (notes.strip() or
+                            "Fully refurbished, tested and ready to play."),
+            "color": 0x2ED573,
+            "footer": {"text": "Interested? Open a private ticket in "
+                               "#private-support to claim it."},
+        }
+        if nd.post_to_channel("for-sale", embeds=[embed]):
+            return f"✅ Posted **{cfg['name']} — ${price:.0f}** to #for-sale"
+        return "❌ Couldn't post to #for-sale — is the channel still there?"
+
+    def _cmd_customer(self, args: list[str]) -> str:
+        """!customer @user  /  !customer remove @user"""
+        from .notify import discord as nd
+        if not args:
+            return "❌ Usage: `!customer @user` or `!customer remove @user`"
+        remove = args[0].lower() == "remove"
+        target = args[1] if remove and len(args) > 1 else args[0]
+        uid = "".join(ch for ch in target if ch.isdigit())
+        if not uid:
+            return "❌ Mention the person, e.g. `!customer @kap`"
+        ok, msg = nd.grant_role(uid, "Customer", remove=remove)
+        if not ok:
+            return f"❌ {msg}"
+        return (f"✅ Removed the Customer role from <@{uid}>" if remove
+                else f"✅ <@{uid}> is now a **Customer** — they can see the "
+                     f"owners area.")
+
     # --- entry point -------------------------------------------------------
     def handle(self, content: str) -> str | None:
         """Returns a reply string, or None if this isn't a command."""
@@ -368,6 +424,11 @@ class CommandHandler:
                 return self._cmd_sold(args)
             if cmd == "stats":
                 return self._cmd_stats()
+            if cmd == "list":
+                return self._cmd_list(text[1:].split(None, 1)[1]
+                                      if len(text.split()) > 1 else "")
+            if cmd == "customer":
+                return self._cmd_customer(args)
         except Exception as e:                    # noqa: BLE001
             log.error("Command %r failed: %s", text, e)
             return f"❌ `{text}` failed: {e}"

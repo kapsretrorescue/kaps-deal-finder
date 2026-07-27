@@ -111,6 +111,36 @@ def process_commands(db: Database, opts: RunOpts, log) -> list[str]:
     return searches
 
 
+def warn(settings: dict, message: str, log) -> None:
+    """Push an operational problem to Discord.
+
+    Failures used to end at a log file nobody reads, which made a dead bot
+    look exactly like a quiet market.
+    """
+    log.error(message)
+    try:
+        if settings.get("notify", {}).get("alert_on_failure", True):
+            notify_discord.send(f"⚠️ **Deal finder problem**\n{message[:1500]}")
+    except Exception:
+        pass          # never let the warning path throw
+
+
+def check_staleness(db: Database, settings: dict, log) -> None:
+    """Tell me if scans stopped happening for a while."""
+    limit = settings.get("notify", {}).get("stale_hours", 8)
+    last = db.get_meta("last_successful_scan")
+    if not last:
+        return
+    try:
+        gap = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(last)).total_seconds() / 3600
+    except ValueError:
+        return
+    if gap >= limit:
+        warn(settings, f"No successful scan for {gap:.0f} hours — scans may "
+                       f"have been failing or not running.", log)
+
+
 def run_search(db: Database, name: str, opts: RunOpts, log) -> tuple[str, list]:
     """On-demand `!search <console>`: hit eBay for ONE console and return the
     best current listings ranked by estimated profit.
@@ -168,6 +198,8 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
     enabled = ["mock"] if opts.mock else [
         k for k, v in settings["sources"].items()
         if v.get("enabled") and k in SOURCE_MODULES]
+    check_staleness(db, settings, log)
+
     listings = []
     for name in enabled:
         try:
@@ -177,7 +209,11 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
             elif not opts.auctions_only:
                 listings.extend(SOURCE_MODULES[name].fetch(consoles, settings))
         except Exception as e:
-            log.error("Source %s crashed: %s", name, e)
+            # eBay is the source that matters; if it breaks, say so loudly.
+            if name == "ebay" and not opts.dry_run:
+                warn(settings, f"eBay source failed: {e}", log)
+            else:
+                log.error("Source %s crashed: %s", name, e)
 
     # ---- 1b. Enrich the shortlist with full descriptions -------------------
     # Search results carry only a condition label. Anything the seller
@@ -195,19 +231,29 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
                 shortlist.append(listing)
         if shortlist:
             try:
-                details = ebay.fetch_descriptions(
+                details = ebay.fetch_details(
                     [l.listing_id for l in shortlist], settings)
                 for listing in shortlist:
-                    extra = details.get(listing.listing_id)
-                    if extra:
-                        listing.description = f"{listing.description} {extra}"
+                    info = details.get(listing.listing_id)
+                    if not info:
+                        continue
+                    listing.description = f"{listing.description} {info['description']}"
+                    if info["local_pickup"]:
+                        # Confirmed against eBay's own location data, not a
+                        # filter — so zeroing the postage is safe here.
+                        listing.local_pickup = True
+                        listing.shipping = 0.0
+                        listing.price_note = f"local pickup — {info['where']}"
             except Exception as e:
-                log.warning("Description fetch failed: %s", e)
+                log.warning("Item detail fetch failed: %s", e)
 
     # ---- 2. Score ---------------------------------------------------------
     new_matches = 0
     dropped_on_detail = 0
     ending_realerts = []
+    price_drops: list[tuple[str, str, float]] = []   # source, id, old price
+    pd_pct = settings["pricing"].get("price_drop_min_pct", 10)
+    pd_usd = settings["pricing"].get("price_drop_min_usd", 10)
     for listing in listings:
         result = analysis.analyze(listing, consoles, settings)
         if result.excluded_reason:
@@ -228,9 +274,27 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
             if row and not row["ending_notified"]:
                 db.refresh_price(result)
                 ending_realerts.append((listing.source, listing.listing_id))
+        elif result.tier in ("great", "good") and result.total_cost is not None:
+            # Already seen, but the seller cut the price. Without this the
+            # listing would stay invisible forever after its first scan.
+            was = db.price_dropped(listing.source, listing.listing_id,
+                                   result.total_cost, pd_pct, pd_usd)
+            if was:
+                db.refresh_price(result)
+                db.note_alerted_price(listing.source, listing.listing_id,
+                                      result.total_cost)
+                price_drops.append((listing.source, listing.listing_id, was))
     log.info("%d listings fetched, %d new matches stored, %d ending-soon "
-             "re-alerts, %d rejected on description",
-             len(listings), new_matches, len(ending_realerts), dropped_on_detail)
+             "re-alerts, %d price drops, %d rejected on description",
+             len(listings), new_matches, len(ending_realerts),
+             len(price_drops), dropped_on_detail)
+    # A run that fetched nothing at all means the source is broken, not that
+    # the market went quiet — 900+ listings is the normal figure.
+    if listings and not opts.dry_run:
+        db.set_meta("last_successful_scan", datetime.now(timezone.utc).isoformat())
+    elif not listings and not opts.mock and not opts.dry_run:
+        warn(settings, "Scan returned zero listings — the eBay source is "
+                       "probably broken (a normal run sees hundreds).", log)
 
     # ---- 3. Instant alerts ------------------------------------------------
     def _alertable_now(row) -> bool:
@@ -258,11 +322,23 @@ def run_scan(db: Database, opts: RunOpts, log) -> None:
     if ending_rows:
         db.mark(ending_rows, "ending_notified")
 
+    # Price drops jump the queue — a seller who just cut a price is the most
+    # time-sensitive thing in the run.
+    drop_rows, drop_prices = [], {}
+    for source, lid, was in price_drops:
+        r = db.conn.execute("SELECT * FROM listings WHERE source=? AND listing_id=?",
+                            (source, lid)).fetchone()
+        if r and (source, lid) not in seen_keys:
+            drop_rows.append(r)
+            drop_prices[lid] = was
+
     cap = settings["notify"].get("instant_max_per_run", 8)
-    all_instant = (instant_rows + ending_rows)[:cap]
-    overflow = len(instant_rows) + len(ending_rows) - len(all_instant)
+    all_instant = (drop_rows + instant_rows + ending_rows)[:cap]
+    overflow = (len(drop_rows) + len(instant_rows) + len(ending_rows)
+                - len(all_instant))
     if all_instant:
-        head, cards = digest.embeds_instant(all_instant, consoles, settings["pricing"])
+        head, cards = digest.embeds_instant(all_instant, consoles,
+                                            settings["pricing"], drop_prices)
         if overflow > 0:
             head += f" · +{overflow} more in the digest"
         if opts.dry_run:
@@ -332,19 +408,28 @@ def main() -> None:
                    auctions_only=args.auctions_only)
     db = Database(PROJECT_ROOT / "data" / "dealfinder.db")
 
-    if opts.auctions_only:          # quick sweep: no commands, no digest
-        run_scan(db, opts, log)
-        return
+    try:
+        if opts.auctions_only:      # quick sweep: no commands, no digest
+            run_scan(db, opts, log)
+            return
 
-    # Commands first, so a config change applies to this very scan
-    searches = process_commands(db, opts, log)
-    for name in searches:
-        head, cards = run_search(db, name, opts, log)
-        if opts.dry_run:
-            print(head, f"({len(cards)} cards)")
-        else:
-            notify_discord.send(head, cards)
-    run_scan(db, opts, log)
+        # Commands first, so a config change applies to this very scan
+        searches = process_commands(db, opts, log)
+        for name in searches:
+            head, cards = run_search(db, name, opts, log)
+            if opts.dry_run:
+                print(head, f"({len(cards)} cards)")
+            else:
+                notify_discord.send(head, cards)
+        run_scan(db, opts, log)
+    except Exception as e:
+        # Anything that reaches here would otherwise be a silent death.
+        try:
+            settings = load_yaml("settings.yaml")
+        except Exception:
+            settings = {}
+        warn(settings, f"Run crashed: {type(e).__name__}: {e}", log)
+        raise
 
 
 if __name__ == "__main__":

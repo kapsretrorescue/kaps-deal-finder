@@ -65,6 +65,17 @@ jobs:
             python -m dealfinder.main ${{ inputs.mock && '--mock' || '' }}
           fi
 
+      # If the job itself dies (bad deps, runner failure, killed step) the
+      # bot can't report it from inside — so the workflow says so instead.
+      - name: Report failure to Discord
+        if: failure()
+        env:
+          HOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          curl -s -X POST -H "Content-Type: application/json" \
+            -d "{\"content\":\"⚠️ **Deal finder workflow failed** — run ${{ github.run_number }} did not complete. Logs: <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}>\"}" \
+            "$HOOK" || true
+
       # Database keeps dedup memory; config may have changed via !set commands
       - name: Commit database and any config changes
         run: |

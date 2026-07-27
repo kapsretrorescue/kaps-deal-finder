@@ -43,12 +43,18 @@ def _get_token(client_id: str, client_secret: str) -> str:
         },
         timeout=30,
     )
-    resp.raise_for_status()
+    if resp.status_code >= 300:
+        # Expired or revoked credentials are the most likely silent killer:
+        # searches quietly return nothing and it looks like a quiet market.
+        raise RuntimeError(
+            f"eBay auth failed ({resp.status_code}) — check EBAY_CLIENT_ID / "
+            f"EBAY_CLIENT_SECRET: {resp.text[:120]}")
     _token_cache = resp.json()["access_token"]
     return _token_cache
 
 
-def _parse_item(item: dict, ending_cutoff: datetime) -> Listing | None:
+def _parse_item(item: dict, ending_cutoff: datetime,
+                local_pickup: bool = False) -> Listing | None:
     item_id = item.get("itemId", "")
     if not item_id:
         return None
@@ -84,10 +90,24 @@ def _parse_item(item: dict, ending_cutoff: datetime) -> Listing | None:
         except ValueError:
             pass
 
-    feedback = ""
+    feedback, seller_pct, seller_score = "", None, None
     seller = item.get("seller", {})
     if seller.get("feedbackPercentage"):
         feedback = f"{seller['feedbackPercentage']}% ({seller.get('feedbackScore', '?')})"
+        try:
+            seller_pct = float(seller["feedbackPercentage"])
+        except (TypeError, ValueError):
+            pass
+    try:
+        seller_score = int(seller.get("feedbackScore"))
+    except (TypeError, ValueError):
+        pass
+
+    # Collecting in person means no postage at all — force it to zero rather
+    # than leaving it unknown, so the per-unit maths reflects reality.
+    if local_pickup:
+        shipping = 0.0
+        note = "local pickup"
 
     # For auctions, "price" is the CURRENT bid — flag that in the note
     if listing_type == "AUCTION":
@@ -106,6 +126,10 @@ def _parse_item(item: dict, ending_cutoff: datetime) -> Listing | None:
         end_time=end_time,
         ending_soon=ending_soon,
         seller_feedback=feedback,
+        seller_score=seller_score,
+        seller_pct=seller_pct,
+        best_offer="BEST_OFFER" in buying,
+        local_pickup=local_pickup,
     )
 
 
@@ -129,18 +153,25 @@ def _headers(settings: dict) -> dict | None:
     return h
 
 
-def fetch_descriptions(item_ids: list[str], settings: dict) -> dict[str, str]:
-    """Full item descriptions for the shortlist that cleared the profit bar.
+def fetch_details(item_ids: list[str], settings: dict) -> dict[str, dict]:
+    """Full detail for the shortlist that cleared the profit bar.
 
-    Search results only carry a condition label, so anything the seller
-    disclosed in the body ("water damage", "no motherboard") is invisible
-    until we pull the item itself.
+    Two things only the item endpoint knows:
+      · the seller's own description — where "water damage" and "no
+        motherboard" usually live, invisible in search results
+      · the real item location and whether local pickup is offered.
+        eBay's search filters for pickup DO NOT WORK (tested: they return
+        sellers in Ohio and Japan unchanged), so pickup is confirmed here
+        against actual location data rather than assumed from a filter.
     """
     headers = _headers(settings)
     if not headers or not item_ids:
         return {}
-    cap = settings["sources"]["ebay"].get("detail_fetch_max", 40)
-    out: dict[str, str] = {}
+    ecfg = settings["sources"]["ebay"]
+    cap = ecfg.get("detail_fetch_max", 40)
+    home_state = str(ecfg.get("local_pickup", {}).get("state", "California"))
+    out: dict[str, dict] = {}
+    local = 0
     for item_id in item_ids[:cap]:
         try:
             resp = requests.get(ITEM_URL + item_id, headers=headers, timeout=30)
@@ -153,8 +184,21 @@ def fetch_descriptions(item_ids: list[str], settings: dict) -> dict[str, str]:
             data.get("shortDescription", ""),
             HTML_TAG.sub(" ", data.get("description", "") or ""),
         ]))
-        out[item_id] = re.sub(r"\s+", " ", text)[:4000]
-    log.info("eBay: pulled %d full descriptions", len(out))
+        loc = data.get("itemLocation") or {}
+        opts = data.get("shippingOptions") or []
+        pickup_offered = any(
+            "PICKUP" in str(o.get("shippingCostType", "")).upper()
+            or "PICKUP" in str(o.get("type", "")).upper() for o in opts)
+        is_local = (loc.get("stateOrProvince") == home_state) and pickup_offered
+        if is_local:
+            local += 1
+        out[item_id] = {
+            "description": re.sub(r"\s+", " ", text)[:4000],
+            "local_pickup": is_local,
+            "where": f"{loc.get('city', '')}, {loc.get('stateOrProvince', '')}".strip(", "),
+        }
+    log.info("eBay: pulled %d item details (%d genuinely local pickup)",
+             len(out), local)
     return out
 
 
@@ -170,18 +214,27 @@ def fetch(consoles: dict, settings: dict, auctions_only: bool = False) -> list[L
     listings: list[Listing] = []
     seen_ids: set[str] = set()
 
-    def run_search(params: dict) -> None:
+    def run_search(params: dict, local: bool = False) -> int:
         try:
             resp = requests.get(SEARCH_URL, headers=headers, params=params, timeout=30)
             resp.raise_for_status()
         except requests.RequestException as e:
             log.warning("eBay search failed (%s): %s", params.get("q"), e)
-            return
+            return -1                       # -1 = the request itself failed
+        found = 0
         for item in resp.json().get("itemSummaries", []):
-            parsed = _parse_item(item, ending_cutoff)
+            parsed = _parse_item(item, ending_cutoff, local_pickup=local)
+            found += 1
             if parsed and parsed.listing_id not in seen_ids:
                 seen_ids.add(parsed.listing_id)
                 listings.append(parsed)
+        return found
+
+    # NOTE: there is deliberately no local-pickup search pass. eBay's
+    # pickupPostalCode / deliveryOptions filters are documented but silently
+    # ignored — tested against the live API, they returned sellers in Ohio,
+    # China and Japan unchanged. Pickup is instead confirmed per item in
+    # fetch_details(), using the location eBay actually reports.
 
     for key, c in consoles.items():
         if not c.get("enabled", True):

@@ -58,6 +58,11 @@ MIGRATIONS = {
     "seller_feedback": "TEXT", "parts_credit": "REAL",
     "est_profit_total": "REAL", "good_units": "INTEGER",
     "ending_notified": "INTEGER DEFAULT 0",
+    # Price we last alerted at — compared against on later scans so a slow
+    # slide doesn't re-ping every run, only a real further drop does.
+    "alerted_price": "REAL",
+    "local_pickup": "INTEGER DEFAULT 0",
+    "best_offer": "INTEGER DEFAULT 0",
 }
 
 
@@ -88,8 +93,9 @@ class Database:
                 shipping, total_cost, eff_per_unit, yield_rate, tier,
                 cheap_fixes, screen_issue, signals, qty_uncertain, mixed_lot,
                 listing_type, end_time, seller_feedback, parts_credit,
-                est_profit, est_profit_total, good_units)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                est_profit, est_profit_total, good_units,
+                alerted_price, local_pickup, best_offer)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (
                 l.source, l.listing_id, l.title, l.url, l.price,
                 datetime.now(timezone.utc).isoformat(),
@@ -100,8 +106,37 @@ class Database:
                 1 if a.qty_uncertain else 0, 1 if a.mixed_lot else 0,
                 l.listing_type, l.end_time, l.seller_feedback, a.parts_credit,
                 a.est_profit_unit, a.est_profit_total, a.good_units,
+                a.total_cost,      # baseline for future price-drop checks
+                1 if l.local_pickup else 0, 1 if l.best_offer else 0,
             ),
         )
+        self.conn.commit()
+
+    def price_dropped(self, source: str, listing_id: str, new_total: float,
+                      min_pct: float, min_usd: float):
+        """Return the previous price if it fell far enough to re-alert.
+
+        Compared against the price we last ALERTED at, not the original, so a
+        gradual slide produces one ping per meaningful drop rather than one
+        per scan.
+        """
+        row = self.conn.execute(
+            "SELECT alerted_price, total_cost FROM listings "
+            "WHERE source=? AND listing_id=?", (source, listing_id)).fetchone()
+        if not row:
+            return None
+        baseline = row["alerted_price"] or row["total_cost"]
+        if not baseline or new_total >= baseline:
+            return None
+        drop = baseline - new_total
+        if drop >= min_usd and (drop / baseline) * 100 >= min_pct:
+            return baseline
+        return None
+
+    def note_alerted_price(self, source: str, listing_id: str, price: float) -> None:
+        self.conn.execute(
+            "UPDATE listings SET alerted_price=? WHERE source=? AND listing_id=?",
+            (price, source, listing_id))
         self.conn.commit()
 
     def refresh_price(self, a: Analysis) -> None:
