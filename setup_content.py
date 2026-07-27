@@ -225,8 +225,9 @@ def api(method: str, path: str, **kw):
 def main() -> None:
     apply = "--apply" in sys.argv
     gid = api("GET", "/users/@me/guilds")[0]["id"]
-    chans = {c["name"]: c for c in api("GET", f"/guilds/{gid}/channels")
-             if c["type"] == 0}
+    # Every channel type, because #repair-requests and #showcase are forums
+    # now — we still need their IDs to build working <#channel> mentions.
+    chans = {c["name"]: c for c in api("GET", f"/guilds/{gid}/channels")}
     need = ["welcome", "faq-and-pricing", "repair-requests", "for-sale", "showcase"]
     missing = [n for n in need if n not in chans]
     if missing:
@@ -235,14 +236,14 @@ def main() -> None:
     ids = {"repair": chans["repair-requests"]["id"], "faq": chans["faq-and-pricing"]["id"],
            "sale": chans["for-sale"]["id"], "show": chans["showcase"]["id"]}
 
+    # Forums can't take plain messages — their guidance lives in the channel
+    # topic instead (set by setup_server_pro.py), so nothing is posted there.
     plan = [
         ("welcome", WELCOME.format(**ids), None, False),
         ("faq-and-pricing", "# 💰 Pricing\n*All service prices include parts, "
                             "labour, and return shipping.*", PRICE_EMBEDS, False),
         ("faq-and-pricing", FAQ.format(**ids), None, False),
-        ("repair-requests", INTAKE.format(**ids), None, True),
         ("for-sale", FOR_SALE.format(**ids), None, True),
-        ("showcase", SHOWCASE.format(**ids), None, True),
     ]
 
     if not apply:
