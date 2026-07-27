@@ -26,25 +26,36 @@ const APPLICATION_COMMAND = 2;
 const PONG = 1;
 const CHANNEL_MESSAGE = 4;
 
+const hex = (s) => Uint8Array.from(s.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
+
+// Cloudflare has used two different names for Ed25519 over the years and
+// which one works depends on the runtime version, so try both rather than
+// betting on one.
+const ALGORITHMS = [
+  { name: "Ed25519" },
+  { name: "NODE-ED25519", namedCurve: "NODE-ED25519" },
+];
+
 /** Discord signs every request; unsigned traffic must be rejected with 401. */
 async function verify(request, body, publicKey) {
   const signature = request.headers.get("x-signature-ed25519");
   const timestamp = request.headers.get("x-signature-timestamp");
   if (!signature || !timestamp) return false;
 
-  const hex = (s) => Uint8Array.from(s.match(/.{1,2}/g).map((b) => parseInt(b, 16)));
-  try {
-    const key = await crypto.subtle.importKey(
-      "raw", hex(publicKey), { name: "Ed25519", namedCurve: "Ed25519" },
-      false, ["verify"]
-    );
-    return await crypto.subtle.verify(
-      { name: "Ed25519" }, key, hex(signature),
-      new TextEncoder().encode(timestamp + body)
-    );
-  } catch (err) {
-    return false;
+  const message = new TextEncoder().encode(timestamp + body);
+  for (const algo of ALGORITHMS) {
+    try {
+      const key = await crypto.subtle.importKey(
+        "raw", hex(publicKey), algo, false, ["verify"]
+      );
+      if (await crypto.subtle.verify(algo, key, hex(signature), message)) {
+        return true;
+      }
+    } catch (err) {
+      // This algorithm name isn't supported here — try the next one.
+    }
   }
+  return false;
 }
 
 function reply(content) {
