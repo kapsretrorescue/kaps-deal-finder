@@ -44,6 +44,7 @@ Nintendo DS · DS Lite · DSi · 3DS · 2DS · New 3DS / New 2DS XL
 → <#{faq}> — full price list and common questions
 → <#{sale}> — refurbished consoles available now
 → <#{show}> — before & after from the bench
+→ <#{ticket}> — 🔒 private ticket, just you and Kap
 
 **How mail-in works**
 1️⃣ Post in <#{repair}> or order at kapsretrorescue.com
@@ -144,6 +145,11 @@ FAQ = """## ❓ Common questions
 Yes — every service price covers parts, labour, and return shipping back to
 you. No surprise postage at the end.
 
+**How long does it take?**
+**7–14 days** turnaround. You'll get a status update at every stage — when
+your console arrives, when work starts, and when it ships back with
+tracking.
+
 **Which consoles do you work on?**
 The Game Boy line (DMG, Color, Advance, SP) and the DS line (DS, DS Lite,
 DSi, 3DS, 2DS, New 3DS / New 2DS XL). More systems are coming.
@@ -203,6 +209,30 @@ find the console, refurbish it, and ship it to you. Pricing is in <#{faq}>.
 Ask in <#{repair}>.
 """
 
+TICKETS = """## 🔒 Private tickets — just you and Kap
+
+Need to talk privately? Open a ticket. Nobody else in the server can see it.
+
+**Use a ticket for:**
+• A repair or sourced build you'd rather not discuss publicly
+• Anything wrong after you got your console back — that's what this is for,
+  and there's no time limit on asking
+• Payment, shipping, or address questions
+• Anything with personal details in it
+
+**How to open one — 10 seconds**
+1️⃣ Click the **`#` +** button next to the message box (or the threads icon
+at the top of this channel)
+2️⃣ Turn **Private Thread** ON
+3️⃣ Name it something like `DS Lite — won't charge`
+4️⃣ Post your question inside it
+
+Kap gets it automatically. Your thread stays private between the two of you.
+
+*For general questions, <#{repair}> is faster — other customers can chime in
+and you might find your answer already there.*
+"""
+
 SHOWCASE = """## ✨ Before & after
 
 Restorations from the bench — yellowed shells brought back, cracked screens
@@ -228,13 +258,16 @@ def main() -> None:
     # Every channel type, because #repair-requests and #showcase are forums
     # now — we still need their IDs to build working <#channel> mentions.
     chans = {c["name"]: c for c in api("GET", f"/guilds/{gid}/channels")}
-    need = ["welcome", "faq-and-pricing", "repair-requests", "for-sale", "showcase"]
+    need = ["welcome", "faq-and-pricing", "repair-requests", "for-sale",
+            "showcase", "private-support"]
     missing = [n for n in need if n not in chans]
     if missing:
-        raise SystemExit(f"Missing channels: {missing}. Run setup_server.py first.")
+        raise SystemExit(f"Missing channels: {missing}. Run setup_server.py "
+                         f"and setup_tickets.py first.")
 
     ids = {"repair": chans["repair-requests"]["id"], "faq": chans["faq-and-pricing"]["id"],
-           "sale": chans["for-sale"]["id"], "show": chans["showcase"]["id"]}
+           "sale": chans["for-sale"]["id"], "show": chans["showcase"]["id"],
+           "ticket": chans["private-support"]["id"]}
 
     # Forums can't take plain messages — their guidance lives in the channel
     # topic instead (set by setup_server_pro.py), so nothing is posted there.
@@ -244,6 +277,7 @@ def main() -> None:
                             "labour, and return shipping.*", PRICE_EMBEDS, False),
         ("faq-and-pricing", FAQ.format(**ids), None, False),
         ("for-sale", FOR_SALE.format(**ids), None, True),
+        ("private-support", TICKETS.format(**ids), None, True),
     ]
 
     if not apply:
